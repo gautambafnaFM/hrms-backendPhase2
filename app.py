@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 TO_ADDRESSES = ["gautam.bafna@flairminds.com"]  # List of recipients
 
-@scheduler.task('cron',id='send_leave_email', hour=12, minute=46)
+@scheduler.task('cron',id='send_leave_email', hour=12, minute=52)
 # @scheduler.task('cron',id='send_leave_email', hour=12, minute=21)
 def send_leave_email():
     with scheduler.app.app_context():
