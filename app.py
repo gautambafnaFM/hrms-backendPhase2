@@ -13,43 +13,19 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 from datetime import datetime, timedelta
 
-# # Load environment variables
-# load_dotenv()
+TO_ADDRESSES = ["gautam.bafna@flairminds.com"]  # List of recipients
 
-# # Initialize Flask app
-# app = Flask(__name__)
-
-# # Enable CORS
-# CORS(app, origins='*', supports_credentials=True)
-
-# # Configuration for database
-# DATABASE = "HRMS"
-# PASSWORD = os.getenv('PASSWORD')
-# encoded_password = urllib.parse.quote_plus(PASSWORD)
-# SERVER = os.getenv('SERVER')
-# USERNAME = os.getenv('USER_NAME')
-
-# # SQL Server Configuration
-# app.config['SQLALCHEMY_DATABASE_URI'] = (
-#     f'mssql+pymssql://{USERNAME}:{encoded_password}@{SERVER}/{DATABASE}'
-# )
-# app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# # Initialize db with the app
-# db.init_app(app)
-
-
-
-# Schedule the email task before the first request
-# @app.before_request
-# def before_first_request():
-#     print("before")
-#     schedule_email_task()
-
-@scheduler.task('cron',id='send_leave_email', hour=10, minute=23)
+@scheduler.task('cron',id='send_leave_email', hour=12, minute=46)
+# @scheduler.task('cron',id='send_leave_email', hour=12, minute=21)
 def send_leave_email():
     with scheduler.app.app_context():
         current_date = datetime.today()
+        if current_date.weekday() == 5:  
+            current_date = current_date + timedelta(days=2)  
+        elif current_date.weekday() == 6:  
+            current_date = current_date + timedelta(days=1)  
+
+      
         current_date = current_date.strftime('%Y-%m-%d')
 
         with db.session.begin():
@@ -65,6 +41,7 @@ def send_leave_email():
                 JOIN Employee e ON lt.AppliedBy = e.EmployeeId
                 JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID  -- Joining with LeaveTypeMaster to get LeaveName
                 WHERE lt.fromDate = :date
+                AND lt.LeaveStatus != 'Cancel'  -- Exclude canceled leaves
                      """),
                 {"date": current_date}
             )
@@ -106,7 +83,7 @@ def send_leave_email():
         # Set up the email message
         msg = MIMEMultipart()
         msg['From'] = FROM_ADDRESS
-        msg['To'] = TO_ADDRESS
+        msg['To'] = ", ".join(TO_ADDRESSES)
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
 
@@ -115,7 +92,7 @@ def send_leave_email():
             server = smtplib.SMTP('smtp.gmail.com', 587)
             server.starttls()  # Upgrade to secure connection
             server.login(FROM_ADDRESS, FROM_PASSWORD)
-            server.sendmail(FROM_ADDRESS, TO_ADDRESS, msg.as_string())
+            server.sendmail(FROM_ADDRESS, TO_ADDRESSES, msg.as_string())
             server.quit()
             print("Email sent successfully!")
         except Exception as e:
