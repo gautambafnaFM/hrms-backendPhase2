@@ -46,17 +46,10 @@ from datetime import datetime, timedelta
 #     print("before")
 #     schedule_email_task()
 
-@scheduler.task('cron',id='send_leave_email', hour=10, minute=00)
+@scheduler.task('cron',id='send_leave_email', hour=10, minute=23)
 def send_leave_email():
     with scheduler.app.app_context():
         current_date = datetime.today()
-
-        if current_date.weekday() == 5:  # Saturday
-            current_date = current_date + timedelta(days=2)  # Skip to Monday
-        elif current_date.weekday() == 6:  # Sunday
-            current_date = current_date + timedelta(days=1)  # Skip to Monday
-
-        # Format the date in 'YYYY-MM-DD' format
         current_date = current_date.strftime('%Y-%m-%d')
 
         with db.session.begin():
@@ -95,7 +88,7 @@ def send_leave_email():
         leave_table += "<tr><th>From Date</th><th>Applied By</th><th>Leave Status</th><th>Leave Type</th></tr>"
 
         for leave in leave_data:
-            leave_table += f"<tr><td>{leave['fromDate']}</td><td>{leave['AppliedBy']}</td><td>{leave['LeaveStatus']}</td><td>{leave['LeaveType']}</td></tr>"
+            leave_table += f"<tr><td>{leave['FromDate']}</td><td>{leave['AppliedBy']}</td><td>{leave['LeaveStatus']}</td><td>{leave['LeaveType']}</td></tr>"
 
         leave_table += "</table>"
 
