@@ -13,11 +13,10 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 from datetime import datetime, timedelta
 
-TO_ADDRESSES = "gautam.bafna@flairminds.com"
+TO_ADDRESSES =[ "gautam.bafna@flairminds.com","shivani.kulkarni@flairminds.com"]
 
-
-@scheduler.task('cron',id='send_leave_email01', hour=10, minute=00)
-@scheduler.task('cron', id='send_leave_email_2', hour=12, minute=5)
+@scheduler.task('cron',id='send_leave_email01', hour=17, minute=40)
+# @scheduler.task('cron', id='send_leave_email_2', hour=14, minute=15)
 
 def send_leave_email01():
     print("IN")
