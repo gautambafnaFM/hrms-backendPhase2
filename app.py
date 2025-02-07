@@ -13,10 +13,10 @@ from dotenv import load_dotenv
 from flask_cors import CORS
 from datetime import datetime, timedelta
 
-TO_ADDRESSES =[ "gautam.bafna@flairminds.com","shivani.kulkarni@flairminds.com"]
+TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
 
-@scheduler.task('cron',id='send_leave_email01', hour=17, minute=40)
-# @scheduler.task('cron', id='send_leave_email_2', hour=14, minute=15)
+@scheduler.task('cron',id='send_leave_email01', hour=10, minute=00)
+# @scheduler.task('cron', id='send_leave_email02', hour=14, minute=48)
 
 def send_leave_email01():
     print("IN")
@@ -103,7 +103,7 @@ def send_leave_email01():
 
 
 def send_leave_email02():
-    print("IN")
+    print("email02")
     with scheduler.app.app_context():
         current_date = datetime.today()
         if current_date.weekday() == 5:  
