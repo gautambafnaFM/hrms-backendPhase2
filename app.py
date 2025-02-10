@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
 
-@scheduler.task('cron',id='send_leave_email01', hour=10, minute=00)
+@scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
 # @scheduler.task('cron', id='send_leave_email02', hour=14, minute=48)
 
 def send_leave_email01():
