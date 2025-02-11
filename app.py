@@ -14,7 +14,8 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 
 TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
-
+# TO_ADDRESSES="gautam.bafna@flairminds.com"
+# @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
 @scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
 
@@ -52,10 +53,11 @@ def send_leave_email01():
             rows = result.fetchall()
             leave_data = [
                 {
-                    'FromDate': row[0].strftime('%Y-%m-%d') if hasattr(row[0], 'strftime') else str(row[0]),
-                    'AppliedBy': f"{row[1]} {row[2]}",
-                    'LeaveStatus': row[3],
-                    'LeaveType': row[4]
+                'FromDate': row[0].strftime('%Y-%m-%d') if row[0] else '',
+                'ToDate': row[1].strftime('%Y-%m-%d') if row[1] else '',
+                'AppliedBy': f"{row[2]} {row[3]}",
+                'LeaveStatus': row[4],
+                'LeaveType': row[5]
                 }
                 for row in rows
             ]
@@ -64,12 +66,27 @@ def send_leave_email01():
         leave_data_json = json.dumps(leave_data, indent=4)
 
         # Convert JSON to HTML Table for better readability
-        leave_table = "<table border='1' style='border-collapse: collapse;'>"
-        leave_table += "<tr><th>From Date</th><th>Applied By</th><th>Leave Status</th><th>Leave Type</th></tr>"
+        leave_table = """
+            <table border='1' style='border-collapse: collapse; text-align: left;'>
+                <tr>
+                    <th>From Date</th>
+                    <th>To Date</th>
+                    <th>Applied By</th>
+                    <th>Leave Status</th>
+                    <th>Leave Type</th>
+                </tr>
+        """
 
         for leave in leave_data:
-            leave_table += f"<tr><td>{leave['FromDate']}</td><td>{leave['AppliedBy']}</td><td>{leave['LeaveStatus']}</td><td>{leave['LeaveType']}</td></tr>"
-
+            leave_table += f"""
+            <tr>
+                <td>{leave['FromDate']}</td>
+                <td>{leave['ToDate']}</td>
+                <td>{leave['AppliedBy']}</td>
+                <td>{leave['LeaveStatus']}</td>
+                <td>{leave['LeaveType']}</td>
+            </tr>
+            """
         leave_table += "</table>"
 
         # Email Subject & Body
@@ -117,29 +134,31 @@ def send_leave_email02():
 
         with db.session.begin():
             result = db.session.execute(
-                text("""
-                     SELECT 
-                    lt.fromDate, 
-                    e.FirstName, 
-                    e.LastName, 
-                    lt.LeaveStatus, 
-                    ltm.LeaveName  -- LeaveName from LeaveTypeMaster
-                FROM LeaveTransaction lt
-                JOIN Employee e ON lt.AppliedBy = e.EmployeeId
-                JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID  -- Joining with LeaveTypeMaster to get LeaveName
-                WHERE lt.fromDate = :date
-                AND lt.LeaveStatus != 'Cancel'  -- Exclude canceled leaves
-                     """),
+                 text("""
+                    SELECT 
+                        lt.fromDate, 
+                        lt.ToDate, 
+                        e.FirstName, 
+                        e.LastName, 
+                        lt.LeaveStatus, 
+                        ltm.LeaveName  -- LeaveName from LeaveTypeMaster
+                    FROM LeaveTransaction lt
+                    JOIN Employee e ON lt.AppliedBy = e.EmployeeId
+                    JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID  -- Joining with LeaveTypeMaster to get LeaveName
+                    WHERE :date BETWEEN lt.fromDate AND lt.ToDate  -- Ensures date falls within leave duration
+                    AND lt.LeaveStatus != 'Cancel'  -- Exclude canceled leaves
+                """),
                 {"date": current_date}
             )
 
             rows = result.fetchall()
             leave_data = [
                 {
-                    'FromDate': row[0].strftime('%Y-%m-%d') if hasattr(row[0], 'strftime') else str(row[0]),
-                    'AppliedBy': f"{row[1]} {row[2]}",
-                    'LeaveStatus': row[3],
-                    'LeaveType': row[4]
+                'FromDate': row[0].strftime('%Y-%m-%d') if row[0] else '',
+                'ToDate': row[1].strftime('%Y-%m-%d') if row[1] else '',
+                'AppliedBy': f"{row[2]} {row[3]}",
+                'LeaveStatus': row[4],
+                'LeaveType': row[5]
                 }
                 for row in rows
             ]
@@ -148,12 +167,27 @@ def send_leave_email02():
         leave_data_json = json.dumps(leave_data, indent=4)
 
         # Convert JSON to HTML Table for better readability
-        leave_table = "<table border='1' style='border-collapse: collapse;'>"
-        leave_table += "<tr><th>From Date</th><th>Applied By</th><th>Leave Status</th><th>Leave Type</th></tr>"
+        leave_table = """
+            <table border='1' style='border-collapse: collapse; text-align: left;'>
+                <tr>
+                    <th>From Date</th>
+                    <th>To Date</th>
+                    <th>Applied By</th>
+                    <th>Leave Status</th>
+                    <th>Leave Type</th>
+                </tr>
+        """
 
         for leave in leave_data:
-            leave_table += f"<tr><td>{leave['FromDate']}</td><td>{leave['AppliedBy']}</td><td>{leave['LeaveStatus']}</td><td>{leave['LeaveType']}</td></tr>"
-
+            leave_table += f"""
+            <tr>
+                <td>{leave['FromDate']}</td>
+                <td>{leave['ToDate']}</td>
+                <td>{leave['AppliedBy']}</td>
+                <td>{leave['LeaveStatus']}</td>
+                <td>{leave['LeaveType']}</td>
+            </tr>
+            """
         leave_table += "</table>"
 
         # Email Subject & Body
@@ -184,6 +218,7 @@ def send_leave_email02():
             print("Email sent successfully!")
         except Exception as e:
             print(f"Error on line {e.__traceback__.tb_lineno} inside {__file__}\n Failed to send email: {str(e)}")
+    
 
 # # Scheduler to run the email sending task daily at 10:18 PM
 # def schedule_email_task():
