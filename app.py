@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
 
 @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
-# @scheduler.task('cron', id='send_leave_email02', hour=14, minute=48)
+@scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
 
 def send_leave_email01():
     print("IN")
@@ -32,19 +32,20 @@ def send_leave_email01():
 
         with db.session.begin():
             result = db.session.execute(
-                text("""
-                     SELECT 
-                    lt.fromDate, 
-                    e.FirstName, 
-                    e.LastName, 
-                    lt.LeaveStatus, 
-                    ltm.LeaveName  -- LeaveName from LeaveTypeMaster
-                FROM LeaveTransaction lt
-                JOIN Employee e ON lt.AppliedBy = e.EmployeeId
-                JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID  -- Joining with LeaveTypeMaster to get LeaveName
-                WHERE lt.fromDate = :date
-                AND lt.LeaveStatus != 'Cancel'  -- Exclude canceled leaves
-                     """),
+                 text("""
+                    SELECT 
+                        lt.fromDate, 
+                        lt.ToDate, 
+                        e.FirstName, 
+                        e.LastName, 
+                        lt.LeaveStatus, 
+                        ltm.LeaveName  -- LeaveName from LeaveTypeMaster
+                    FROM LeaveTransaction lt
+                    JOIN Employee e ON lt.AppliedBy = e.EmployeeId
+                    JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID  -- Joining with LeaveTypeMaster to get LeaveName
+                    WHERE :date BETWEEN lt.fromDate AND lt.ToDate  -- Ensures date falls within leave duration
+                    AND lt.LeaveStatus != 'Cancel'  -- Exclude canceled leaves
+                """),
                 {"date": current_date}
             )
 
