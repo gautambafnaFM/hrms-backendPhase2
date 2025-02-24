@@ -18,7 +18,66 @@ TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
 @scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
-@scheduler.task('cron', id='send_leave_approval_email', day=25, hour=1, minute=0)
+def send_leave_approval_email():
+    """Fetch lead emails and send an approval request email."""
+    print("GB")
+    with app.app_context():  # ✅ Fix: Use app.app_context() to access the database
+        try:
+            # Fetching lead emails from the database
+            result = db.session.execute(text("""
+                SELECT Email FROM [HRMS].[dbo].[Employee] WHERE IsLead = 1
+            """))
+
+            lead_emails = [row.Email for row in result if row.Email]  # Extract emails
+            lead_emails.append("parag.khandekar@flairminds.com")  # Manually added email
+
+            if not lead_emails:
+                return {"error": "No lead emails found"}
+
+            # Secure Email Configuration
+            FROM_ADDRESS = "flairmindshr@gmail.com"
+            FROM_PASSWORD = "zvhj wpau jqor whkp"   # Securely fetch password
+            if not FROM_PASSWORD:
+                return {"error": "Email password not set"}
+
+            SUBJECT = "Pending Leave Approvals"
+            BODY = """
+            <p>Hello,</p>
+            <p>You have pending leave requests for approval in the HRMS system. Please review and take the necessary action for all associates under your approval.</p>
+            <p>Kindly log in to the HRMS portal to process the requests: <a href='https://hrms.flairminds.com'>HRMS Portal</a></p>
+            """
+
+            # Prepare Email
+            msg = MIMEMultipart()
+            msg["From"] = FROM_ADDRESS
+            msg["To"] = ", ".join(lead_emails)
+            msg["Subject"] = SUBJECT
+            msg.attach(MIMEText(BODY, "html"))
+
+            try:
+                # Sending Email via Gmail SMTP
+                with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                    server.starttls()
+                    server.login(FROM_ADDRESS, FROM_PASSWORD)
+                    server.sendmail(FROM_ADDRESS, lead_emails, msg.as_string())
+
+                return {"message": "Email sent successfully!"}
+
+            except Exception as e:
+                return {"error": f"Failed to send email: {str(e)}"}
+
+        except Exception as e:
+            return {"error": str(e)}
+
+# ✅ Fix: Wrap the function inside app.app_context() in the scheduler
+@scheduler.task('cron', id='send_leave_approval_email', day=28, hour=5, minute=00)
+def scheduled_send_email():
+    """Scheduled job to send leave approval emails."""
+    with app.app_context():  # ✅ Ensures the scheduler runs inside Flask context
+        result = send_leave_approval_email()
+        print(result)  # Log the result
+
+
 def send_leave_email01():
     print("IN")
     with scheduler.app.app_context():
