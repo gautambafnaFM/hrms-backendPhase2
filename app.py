@@ -18,7 +18,7 @@ TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
 @scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
-
+@scheduler.task('cron', id='send_leave_approval_email', day=25, hour=1, minute=0)
 def send_leave_email01():
     print("IN")
     with scheduler.app.app_context():
@@ -243,82 +243,6 @@ def employee_skills():
     return jsonify(data)
 
 
-
-# @app.route('/api/add-update-skills', methods=['POST'])
-# def add_or_update_skills():
-#     """API endpoint to add or update multiple skills for an employee, including isReady and isReadyDate."""
-#     try:
-#         data = request.json
-#         employee_id = data.get('EmployeeId')
-#         skills = data.get('skills', [])  # Expecting a list of skills
-
-#         # Validate input
-#         if not employee_id or not skills:
-#             return jsonify({'error': 'EmployeeId and skills are required'}), 400
-
-#         with db.session.begin():
-#             for skill in skills:
-#                 skill_id = skill.get('SkillId')
-#                 skill_level = skill.get('SkillLevel')
-#                 is_ready = skill.get('isReady', 'No')  # Default to 'No'
-#                 is_ready_date = skill.get('isReadyDate')
-#                 # is_ready_date = skill.get('isReadyDate', datetime.utcnow().strftime('%Y-%m-%d'))  # Default to today's date
-#                 if is_ready_date:
-#                     try:
-#                         is_ready_date = datetime.strptime(is_ready_date, "%a, %d %b %Y %H:%M:%S GMT").strftime("%Y-%m-%d")
-#                     except ValueError:
-#                         return jsonify({'error': 'Invalid date format. Expected format: Mon, 17 Feb 2025 00:00:00 GMT'}), 400
-                
-#                 if not skill_id or not skill_level:
-#                     return jsonify({'error': 'Each skill must have skillId and skillLevel'}), 400
-
-#                 # Check if the skill already exists for this employee
-#                 result = db.session.execute(
-#                     text("""
-#                         SELECT COUNT(*) FROM EmployeeSkill 
-#                         WHERE EmployeeId = :employee_id AND SkillId = :skill_id
-#                     """),
-#                     {'employee_id': employee_id, 'skill_id': skill_id}
-#                 ).scalar()
-
-#                 if result > 0:
-#                     # Update the existing skill
-#                     db.session.execute(
-#                         text("""
-#                             UPDATE EmployeeSkill 
-#                             SET SkillLevel = :skill_level, isReady = :is_ready, isReadyDate = :is_ready_date
-#                             WHERE EmployeeId = :employee_id AND SkillId = :skill_id
-#                         """),
-#                         {
-#                             'employee_id': employee_id,
-#                             'skill_id': skill_id,
-#                             'skill_level': skill_level,
-#                             'is_ready': is_ready,
-#                             'is_ready_date': is_ready_date
-#                         }
-#                     )
-#                 else:
-#                     # Insert new skill
-#                     db.session.execute(
-#                         text("""
-#                             INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, isReadyDate)
-#                             VALUES (:employee_id, :skill_id, :skill_level, :is_ready, :is_ready_date)
-#                         """),
-#                         {
-#                             'employee_id': employee_id,
-#                             'skill_id': skill_id,
-#                             'skill_level': skill_level,
-#                             'is_ready': is_ready,
-#                             'is_ready_date': is_ready_date
-#                         }
-#                     )
-
-#         return jsonify({'message': 'Skills added/updated successfully'}), 201
-
-#     except Exception as e:
-#         return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/add-update-skills', methods=['POST'])
 def add_or_update_skills():
     """API endpoint to add or update multiple skills for an employee, including isReady and isReadyDate."""
@@ -326,10 +250,40 @@ def add_or_update_skills():
         data = request.json
         employee_id = data.get('EmployeeId')
         skills = data.get('skills', [])  # Expecting a list of skills
+        qualification_year_month = data.get('QualificationYearMonth')  # New field
+        full_stack_ready = data.get('FullStackReady', 0)  
 
         # Validate input
         if not employee_id or not skills:
             return jsonify({'error': 'EmployeeId and skills are required'}), 400
+
+        if qualification_year_month:
+            try:
+                datetime.strptime(qualification_year_month, "%Y-%m-%d")  # Validate format
+            except ValueError:
+                return jsonify({'error': 'Invalid QualificationYearMonth format. Expected YYYY-MM.'}), 400
+
+        with db.session.begin():
+            if qualification_year_month:
+                db.session.execute(
+                    text("""
+                        UPDATE Employee 
+                        SET QualificationYearMonth = :qualification_year_month
+                        WHERE EmployeeId = :employee_id
+                    """),
+                    {'qualification_year_month': qualification_year_month, 'employee_id': employee_id}
+                )
+
+        with db.session.begin():
+            db.session.execute(
+                text("""
+                    UPDATE Employee 
+                    SET FullStackReady = :full_stack_ready
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'full_stack_ready': full_stack_ready, 'employee_id': employee_id}
+            )
+       
 
         with db.session.begin():
             for skill in skills:
@@ -401,60 +355,160 @@ def add_or_update_skills():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-        
+
 @app.route('/api/employee-skills/<employee_id>', methods=['GET'])
 def get_employee_skills(employee_id):
-    """API endpoint to fetch all skills for a specific employee."""
+    """API endpoint to fetch all skills for a specific employee, including QualificationYearMonth."""
     try:
         with db.session.begin():
             result = db.session.execute(
                 text("""
-                    SELECT es.EmployeeId, es.SkillId, es.SkillLevel, 
+                    SELECT e.EmployeeId, e.QualificationYearMonth, e.FullStackReady, 
+                           es.SkillId, es.SkillLevel, 
                            s.SkillName, es.isReady, es.isReadyDate
-                    FROM EmployeeSkill es
+                    FROM Employee e
+                    LEFT JOIN EmployeeSkill es ON e.EmployeeId = es.EmployeeId
                     LEFT JOIN Skill s ON es.SkillId = s.SkillId
-                    WHERE es.EmployeeId = :employee_id
+                    WHERE e.EmployeeId = :employee_id
                 """),
                 {'employee_id': employee_id}
             )
-           
 
-            # skills = [dict(row) for row in result.fetchall()]
-            # skills = [dict(zip(result.keys(), row)) for row in result.fetchall()]
             skills = []
+            qualification_year_month = None
+            full_stack_ready = None
+
             for row in result.fetchall():
-                skill_dict = dict(zip(result.keys(), row))
-                skill_dict["isReady"] = int(skill_dict["isReady"])  # Convert boolean to integer
-                skills.append(skill_dict)
+                row_dict = dict(zip(result.keys(), row))
+                
+                # Extract QualificationYearMonth once
+                if qualification_year_month is None:
+                    qualification_year_month = row_dict.pop("QualificationYearMonth", None)
 
+                if full_stack_ready is None:
+                    full_stack_ready = row_dict.pop("FullStackReady", None)
 
+                # Append only skill-related fields
+                if row_dict["SkillId"]:  # Avoid appending empty skills if no skill exists
+                    skills.append({
+                        "SkillId": row_dict["SkillId"],
+                        "SkillLevel": row_dict["SkillLevel"],
+                        "SkillName": row_dict["SkillName"],
+                        "isReady": int(row_dict["isReady"]),
+                        "isReadyDate": row_dict["isReadyDate"]
+                    })
 
-
-        return jsonify({'employee_id': employee_id, 'skills': skills}), 200
+        return jsonify({
+            "EmployeeId": employee_id,
+            "QualificationYearMonth": qualification_year_month,
+            "skills": skills,
+             "FullStackReady": full_stack_ready,
+        }), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-
-
-
 
 @app.route('/api/employees', methods=['GET'])
 def get_employees():
     with db.session.begin():
         result = db.session.execute(
             text("""
-                SELECT TOP (1000) 
+                SELECT 
                     e.EmployeeId, e.FirstName, e.LastName, e.DateOfJoining,
-                    e.TeamLeadId, e.SubRole, e.LobLead, e.IsLead,
+                    e.TeamLeadId, e.SubRole, e.LobLead, e.IsLead, e.FullStackReady, 
                     es.SkillId, s.SkillName, es.SkillLevel, es.isReady, es.isReadyDate
                 FROM HRMS.dbo.Employee e
                 LEFT JOIN HRMS.dbo.EmployeeSkill es ON e.EmployeeId = es.EmployeeId
                 LEFT JOIN HRMS.dbo.Skill s ON es.SkillId = s.SkillId
             """)
         )
-        employees = [dict(row) for row in result.mappings()]
-    return jsonify(employees)
+        
+        employees_dict = {}
+
+        for row in result.mappings():
+            emp_id = row['EmployeeId']
+            if emp_id not in employees_dict:
+                employees_dict[emp_id] = {
+                    "EmployeeId": emp_id,
+                    "FirstName": row["FirstName"],
+                    "LastName": row["LastName"],
+                    "DateOfJoining": row["DateOfJoining"].strftime("%a, %d %b %Y %H:%M:%S GMT") if row["DateOfJoining"] else None,
+                    "TeamLeadId": row["TeamLeadId"],
+                    "SubRole": row["SubRole"],
+                    "LobLead": row["LobLead"],
+                    "IsLead": row["IsLead"],
+                     "FullStackReady": bool(row["FullStackReady"]), 
+                    "Skills": {
+                        "Primary": [],
+                        "Secondary": []
+                    }
+                }
+
+            skill_data = {
+                "SkillId": row["SkillId"],
+                "SkillName": row["SkillName"],
+                "isReady": row["isReady"],
+                "isReadyDate": row["isReadyDate"].strftime("%a, %d %b %Y %H:%M:%S GMT") if row["isReadyDate"] else None
+            }
+
+            if row["SkillLevel"] == "Primary":
+                employees_dict[emp_id]["Skills"]["Primary"].append(skill_data)
+            elif row["SkillLevel"] == "Secondary":
+                employees_dict[emp_id]["Skills"]["Secondary"].append(skill_data)
+
+    return jsonify(list(employees_dict.values()))
+
+
+# @app.route('/api/send-leave-approval-email', methods=['POST'])
+def send_leave_approval_email():
+    """Fetch lead emails and send an approval request email."""
+    try:
+        # Fetching lead emails from the database
+        result =()
+        # db.session.execute(text("""
+        #     SELECT Email
+        #     FROM [HRMS].[dbo].[Employee]
+        #     WHERE IsLead = 1
+        # """))
+
+        lead_emails = [row.Email for row in result if row.Email]  # Extract emails
+        lead_emails.append("gautam.bafna@flairminds.com")  # Manually added email
+
+        if not lead_emails:
+            return jsonify({"error": "No lead emails found"}), 404
+
+        # Email Configuration
+        FROM_ADDRESS = "flairmindshr@gmail.com" # Securely fetch email
+        FROM_PASSWORD = "zvhj wpau jqor whkp" # Securely fetch password
+        SUBJECT = "Pending Leave Approvals"
+        BODY = """
+        <p>Hello,</p>
+        <p>You have pending leave requests for approval in the HRMS system. Please review and take the necessary action for all associates under your approval.</p>
+        <p>Kindly log in to the HRMS portal to process the requests: <a href='https://hrms.flairminds.com'>HRMS Portal</a></p>
+        """
+
+        # Prepare Email
+        msg = MIMEMultipart()
+        msg["From"] = FROM_ADDRESS
+        msg["To"] = ", ".join(lead_emails)
+        msg["Subject"] = SUBJECT
+        msg.attach(MIMEText(BODY, "html"))
+
+        try:
+            # Sending Email via Gmail SMTP
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(FROM_ADDRESS, FROM_PASSWORD)
+            server.sendmail(FROM_ADDRESS, lead_emails, msg.as_string())
+            server.quit()
+            return jsonify({"message": "Email sent successfully!"}), 200
+        except Exception as e:
+            return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 
 # Start the scheduler when the app runs
 if __name__ == '__main__':
