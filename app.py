@@ -6,12 +6,16 @@ import smtplib
 import json
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-
+from io import BytesIO
 import os
 import urllib.parse
 from dotenv import load_dotenv
 from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
+from flask import send_file
+from werkzeug.utils import secure_filename
+
+
 
 TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
 # TO_ADDRESSES="gautam.bafna@flairminds.com"
@@ -499,7 +503,8 @@ def get_employees():
                      "FullStackReady": bool(row["FullStackReady"]), 
                     "Skills": {
                         "Primary": [],
-                        "Secondary": []
+                        "Secondary": [],
+                        "CrossTechSkill":[]
                     }
                 }
 
@@ -514,6 +519,9 @@ def get_employees():
                 employees_dict[emp_id]["Skills"]["Primary"].append(skill_data)
             elif row["SkillLevel"] == "Secondary":
                 employees_dict[emp_id]["Skills"]["Secondary"].append(skill_data)
+            elif row["SkillLevel"] == "Cross Tech Skill":
+                employees_dict[emp_id]["Skills"]["CrossTechSkill"].append(skill_data)
+            
 
     return jsonify(list(employees_dict.values()))
 
@@ -569,6 +577,203 @@ def send_leave_approval_email():
 
 
 
+
+
+UPLOAD_FOLDER = "uploads"  # Folder to store files temporarily
+ALLOWED_EXTENSIONS = {"pdf"}
+
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+# Ensure upload folder exists
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+
+def allowed_file(filename):
+    """Check if the file has a valid extension."""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route("/api/upload-document", methods=["POST"])
+def upload_document():
+    try:
+        emp_id = request.form.get("emp_id")
+        doc_type = request.form.get("doc_type")  # tenth, twelve, pan, adhar, grad
+
+        if not emp_id or not doc_type:
+            return jsonify({"error": "Employee ID and document type are required"}), 400
+
+        if doc_type not in ["tenth", "twelve", "pan", "adhar", "grad"]:
+            return jsonify({"error": "Invalid document type"}), 400
+
+        if "file" not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+
+        file = request.files["file"]
+
+        if file.filename == "":
+            return jsonify({"error": "No selected file"}), 400
+
+        if not allowed_file(file.filename):
+            return jsonify({"error": "Only PDF files are allowed"}), 400
+
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        file.save(filepath)
+
+        # Read file as binary
+        with open(filepath, "rb") as f:
+            file_blob = f.read()
+
+        # Save to database
+        with db.session.begin():
+            db.session.execute(
+                text(f"""
+                    UPDATE emp_documents
+                    SET {doc_type} = :file_blob
+                    WHERE emp_id = :emp_id
+                """),
+                {"file_blob": file_blob, "emp_id": emp_id},
+            )
+
+        # Delete temp file
+        os.remove(filepath)
+
+        return jsonify({"message": f"{doc_type} document uploaded successfully"}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+DOCUMENT_COLUMNS = {'tenth', 'twelve', 'pan', 'adhar', 'grad'}
+
+@app.route('/api/get-document/<emp_id>/<doc_type>', methods=['GET'])
+def get_document(emp_id, doc_type):
+    try:
+        # Check if the requested document type is valid
+        if doc_type not in DOCUMENT_COLUMNS:
+            return jsonify({'error': 'Invalid document type'}), 400
+
+        # Query to fetch the requested document
+        query = text(f"SELECT {doc_type} FROM emp_documents WHERE emp_id = :emp_id")
+        result = db.session.execute(query, {'emp_id': emp_id}).fetchone()
+
+        if not result or not result[0]:
+            return jsonify({'error': 'Document not found'}), 404
+
+        file_blob = result[0]  # Binary data of the document
+
+        return send_file(
+            BytesIO(file_blob),
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'{emp_id}_{doc_type}.pdf'
+        )
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route("/api/delete-document", methods=["DELETE"])
+def delete_document():
+    try:
+        emp_id = request.args.get("employeeId")  # Get from query params
+        doc_type = request.args.get("docType")  # Get from query params
+
+        if not emp_id or not doc_type:
+            return jsonify({"error": "Employee ID and document type are required"}), 400
+
+        if doc_type not in ["tenth", "twelve", "pan", "adhar", "grad"]:
+            return jsonify({"error": "Invalid document type"}), 400
+
+        # Set the specified document column to NULL in the database
+        with db.session.begin():
+            db.session.execute(
+                text(f"""
+                    UPDATE emp_documents
+                    SET {doc_type} = NULL
+                    WHERE emp_id = :emp_id
+                """),
+                {"emp_id": emp_id},
+            )
+
+        return jsonify({"message": f"{doc_type} document deleted successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/document-status/<emp_id>", methods=["GET"])
+def document_status(emp_id):
+    try:
+        # Fetch document details from the database
+        result = db.session.execute(
+            text("""
+                SELECT tenth, twelve, pan, adhar, grad
+                FROM emp_documents
+                WHERE emp_id = :emp_id
+            """),
+            {"emp_id": emp_id}
+        ).fetchone()
+
+        if not result:
+            return jsonify({"error": "Employee not found"}), 404
+
+        # Convert the database result into a dictionary
+        doc_status = {
+            "documents": [
+                {"doc_type": "tenth", "uploaded": bool(result.tenth)},
+                {"doc_type": "twelve", "uploaded": bool(result.twelve)},
+                {"doc_type": "adhar", "uploaded": bool(result.adhar)},
+                {"doc_type": "pan", "uploaded": bool(result.pan)},
+                {"doc_type": "grad", "uploaded": bool(result.grad)}
+            ]
+        }
+
+        return jsonify(doc_status), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 # Start the scheduler when the app runs
+
+@app.route("/api/all-employees", methods=["GET"])
+def get_all_employees():
+    try:
+        query = text("""
+            SELECT 
+                ed.emp_id, 
+                e.FirstName, 
+                e.MiddleName, 
+                e.LastName, 
+                ed.tenth, 
+                ed.twelve, 
+                ed.pan, 
+                ed.adhar, 
+                ed.grad 
+            FROM emp_documents ed
+            JOIN Employee e ON ed.emp_id = e.EmployeeId
+        """)
+        
+        result = db.session.execute(query)
+        
+        employees = []
+        for row in result:
+            full_name = " ".join(filter(None, [row.FirstName, row.MiddleName, row.LastName]))  # Handling None values
+            employees.append({
+                "emp_id": row.emp_id,
+                "name": full_name,
+                "tenth": bool(row.tenth),  # Convert to boolean (True if uploaded, False otherwise)
+                "twelve": bool(row.twelve),
+                "pan": bool(row.pan),
+                "adhar": bool(row.adhar),
+                "grad": bool(row.grad),
+            })
+
+        return jsonify(employees), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
