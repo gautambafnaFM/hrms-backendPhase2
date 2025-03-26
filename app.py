@@ -305,8 +305,7 @@ def employee_skills():
     data = get_employee_skills()
     return jsonify(data)
 
-
-@app.route('/api/add-update-skills', methods=['POST'])
+@app.route("/api/add-update-skills", methods=["POST"])
 def add_or_update_skills():
     """API endpoint to add or update multiple skills for an employee, including isReady and isReadyDate."""
     try:
