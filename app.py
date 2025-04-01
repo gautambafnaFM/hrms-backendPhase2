@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 
 
-TO_ADDRESSES =[ "hr@flairminds.com","hashmukh@flairminds.com"]
+TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com"]
 # TO_ADDRESSES="gautam.bafna@flairminds.com"
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
@@ -715,6 +715,117 @@ def get_all_employees():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/add-project", methods=["POST"])
+def add_project():
+    try:
+        data = request.json
+        project_name = data.get("project_name")
+        end_date = data.get("end_date")
+        required = data.get("required", 0)  # Default to 0 if not provided
+
+        if not project_name:
+            return jsonify({"error": "Project name is required"}), 400
+
+        # Convert `required` to integer (0 or 1)
+        required = 1 if required else 0
+
+        with db.session.begin() as session:
+            db.session.execute(
+                text("""
+                    INSERT INTO ProjectList (ProjectName, EndDate, Required)
+                    VALUES (:project_name, :end_date, :required)
+                """),
+                {"project_name": project_name, "end_date": end_date, "required": required},
+            )
+            session.commit()
+
+        return jsonify({"message": "Project added successfully"}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/delete-project/<int:project_id>", methods=["DELETE"])
+def delete_project(project_id):
+    try:
+        with db.session.begin():
+            result = db.session.execute(
+                text("DELETE FROM ProjectList WHERE ProjectID = :project_id"),
+                {"project_id": project_id}
+            )
+            
+            if result.rowcount == 0:  # No matching project found
+                return jsonify({"error": "Project not found"}), 404
+
+        return jsonify({"message": "Project deleted successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/delete-project-EmployeeAllocations/<int:project_id>", methods=["DELETE"])
+def delete_projectEmployeeAllocations(project_id):
+    try:
+        with db.session.begin():
+            result = db.session.execute(
+                text("DELETE FROM ProjectList WHERE ProjectID = :project_id"),
+                {"project_id": project_id}
+            )
+            
+            if result.rowcount == 0:  # No matching project found
+                return jsonify({"error": "Project not found"}), 404
+
+        return jsonify({"message": "Project deleted successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+@app.route("/api/projects", methods=["GET"])
+def get_projects():
+    try:
+        result = db.session.execute(text("SELECT ProjectID, ProjectName, EndDate, Required FROM ProjectList"))
+        projects = [dict(row) for row in result.mappings()]  
+
+        return jsonify({"projects": projects}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/assign-employee", methods=["POST"])
+def assign_employee():
+    try:
+        data = request.json
+        employee_id = data.get("employee_id")
+        project_id = data.get("project_id")
+        work_category_id = data.get("work_category_id")
+        allocation = data.get("allocation", 1.0)  # Default to 1.0 if not provided
+
+        if not employee_id or not project_id or not work_category_id:
+            return jsonify({"error": "Employee ID, Project ID, and Work Category ID are required"}), 400
+
+        with db.session.begin():
+            db.session.execute(
+                text("""
+                    INSERT INTO EmployeeAllocations (EmployeeID, ProjectID, WorkCategoryID, Allocation)
+                    VALUES (:employee_id, :project_id, :work_category_id, :allocation)
+                """),
+                {
+                    "employee_id": employee_id.strip(),
+                    "project_id": project_id,
+                    "work_category_id": work_category_id,
+                    "allocation": allocation,
+                }
+            )
+
+        return jsonify({"message": f"Employee {employee_id.strip()} assigned to project successfully"}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
