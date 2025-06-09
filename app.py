@@ -1043,5 +1043,97 @@ def send_policy_email():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/update-warning-count', methods=['POST'])
+def update_warning_count():
+    try:
+        data = request.json
+        employee_id = data.get('employeeId')
+
+        if not employee_id:
+            return jsonify({'error': 'Employee ID is required'}), 400
+
+        with db.session.begin():
+            # First check if record exists and get current count
+            result = db.session.execute(
+                text("""
+                    SELECT COALESCE(WarningCount, 0) as WarningCount 
+                    FROM EmployeePolicyAcknowledgementStatus 
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchone()
+            
+            current_count = result.WarningCount if result else 0
+            new_count = current_count + 1
+            
+            if not result:
+                # Insert new record with warning count
+                db.session.execute(
+                    text("""
+                        INSERT INTO EmployeePolicyAcknowledgementStatus 
+                        (EmployeeId, WarningCount)
+                        VALUES (:employee_id, :warning_count)
+                    """),
+                    {
+                        'employee_id': employee_id,
+                        'warning_count': new_count
+                    }
+                )
+            else:
+                # Update existing record
+                db.session.execute(
+                    text("""
+                        UPDATE EmployeePolicyAcknowledgementStatus 
+                        SET WarningCount = :warning_count
+                        WHERE EmployeeId = :employee_id
+                    """),
+                    {
+                        'employee_id': employee_id,
+                        'warning_count': new_count
+                    }
+                )
+
+            # If count exceeds 3, update employee status to Relieved
+            if new_count > 3:
+                db.session.execute(
+                    text("""
+                        UPDATE Employee 
+                        SET EmploymentStatus = 'Relieved'
+                        WHERE EmployeeId = :employee_id
+                    """),
+                    {'employee_id': employee_id}
+                )
+                
+        return jsonify({
+            'message': 'Warning count updated successfully',
+            'employeeId': employee_id,
+            'warningCount': new_count,
+            'statusUpdated': new_count > 3
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/warning-count/<employee_id>', methods=['GET'])
+def get_warning_count(employee_id):
+    try:
+        with db.session.begin():
+            result = db.session.execute(
+                text("""
+                    SELECT COALESCE(WarningCount, 0) as WarningCount 
+                    FROM EmployeePolicyAcknowledgementStatus 
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchone()
+            
+            if not result:
+                return jsonify({'warningCount': 0}), 200
+                
+            return jsonify({'warningCount': result.WarningCount}), 200
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
