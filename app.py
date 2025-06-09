@@ -826,6 +826,222 @@ def assign_employee():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/policy-acknowledgment/<employee_id>', methods=['GET'])
+def get_policy_acknowledgment(employee_id):
+    try:
+        with db.session.begin():
+            result = db.session.execute(
+                text("""
+                    SELECT 
+                        EmployeeId,
+                        LeavePolicyAcknowledged,
+                        WorkFromHomePolicyAcknowledged,
+                        ExitPolicyAndProcessAcknowledged,
+                        SalaryAdvanceRecoveryPolicyAcknowledged,
+                        ProbationToConfirmationPolicyAcknowledged,
+                        SalaryAndAppraisalPolicyAcknowledged
+                    FROM EmployeePolicyAcknowledgementStatus
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            )
+            
+            row = result.fetchone()
+            
+            if not row:
+                return jsonify({'error': 'Employee not found'}), 404
+                
+            acknowledgment_status = {
+                'EmployeeId': row.EmployeeId,
+                'LeavePolicyAcknowledged': bool(row.LeavePolicyAcknowledged),
+                'WorkFromHomePolicyAcknowledged': bool(row.WorkFromHomePolicyAcknowledged),
+                'ExitPolicyAndProcessAcknowledged': bool(row.ExitPolicyAndProcessAcknowledged),
+                'SalaryAdvanceRecoveryPolicyAcknowledged': bool(row.SalaryAdvanceRecoveryPolicyAcknowledged),
+                'ProbationToConfirmationPolicyAcknowledged': bool(row.ProbationToConfirmationPolicyAcknowledged),
+                'SalaryAndAppraisalPolicyAcknowledged': bool(row.SalaryAndAppraisalPolicyAcknowledged)
+            }
+            
+            return jsonify(acknowledgment_status), 200
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/policy-acknowledgment', methods=['POST'])
+# @cross_origin(origins=['http://localhost:5173'], supports_credentials=True)
+def update_policy_acknowledgment():
+    try:
+        if not request.is_json:
+            return jsonify({'error': 'Content-Type must be application/json'}), 415
+
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        policy_name = data.get('policyName')
+        acknowledged = data.get('acknowledged', True)
+        
+        if not employee_id or not policy_name:
+            return jsonify({'error': 'employeeId and policyName are required'}), 400
+            
+        # Map frontend policy name to database column name
+        policy_column_map = {
+            'Leave Policy': 'LeavePolicyAcknowledged',
+            'Work From Home Policy': 'WorkFromHomePolicyAcknowledged',
+            'Exit Policy & Process': 'ExitPolicyAndProcessAcknowledged',
+            'Salary Advance & Recovery Policy': 'SalaryAdvanceRecoveryPolicyAcknowledged',
+            'Probation To Confirmation Policy': 'ProbationToConfirmationPolicyAcknowledged',
+            'Salary and appraisal process policy': 'SalaryAndAppraisalPolicyAcknowledged'
+        }
+        
+        if policy_name not in policy_column_map:
+            return jsonify({'error': 'Invalid policy name'}), 400
+            
+        column_name = policy_column_map[policy_name]
+        
+        with db.session.begin():
+            # First check if record exists
+            result = db.session.execute(
+                text(f"""
+                    SELECT COUNT(*) 
+                    FROM EmployeePolicyAcknowledgementStatus 
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).scalar()
+            
+            if result == 0:
+                # Insert new record
+                db.session.execute(
+                    text(f"""
+                        INSERT INTO EmployeePolicyAcknowledgementStatus 
+                        (EmployeeId, {column_name})
+                        VALUES (:employee_id, :acknowledged)
+                    """),
+                    {
+                        'employee_id': employee_id,
+                        'acknowledged': acknowledged
+                    }
+                )
+            else:
+                # Update existing record
+                db.session.execute(
+                    text(f"""
+                        UPDATE EmployeePolicyAcknowledgementStatus 
+                        SET {column_name} = :acknowledged
+                        WHERE EmployeeId = :employee_id
+                    """),
+                    {
+                        'employee_id': employee_id,
+                        'acknowledged': acknowledged
+                    }
+                )
+                
+        return jsonify({
+            'message': 'Policy acknowledgment updated successfully',
+            'employeeId': employee_id,
+            'policyName': policy_name,
+            'acknowledged': acknowledged
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/send-policy-email', methods=['POST'])
+def send_policy_email():
+    try:
+        data = request.json
+        employee_id = data.get('employeeId')
+        
+        if not employee_id:
+            return jsonify({'error': 'Employee ID is required'}), 400
+
+        # Get employee details
+        with db.session.begin():
+            employee_result = db.session.execute(
+                text("""
+                    SELECT FirstName, LastName, Email
+                    FROM Employee
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchone()
+
+            if not employee_result:
+                return jsonify({'error': 'Employee not found'}), 404
+
+            # Get policy acknowledgment status
+            policy_result = db.session.execute(
+                text("""
+                    SELECT 
+                        LeavePolicyAcknowledged,
+                        WorkFromHomePolicyAcknowledged,
+                        ExitPolicyAndProcessAcknowledged,
+                        SalaryAdvanceRecoveryPolicyAcknowledged,
+                        ProbationToConfirmationPolicyAcknowledged,
+                        SalaryAndAppraisalPolicyAcknowledged
+                    FROM EmployeePolicyAcknowledgementStatus
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchone()
+
+            if not policy_result:
+                return jsonify({'error': 'Policy acknowledgment status not found'}), 404
+
+            # Check if all policies are acknowledged
+            all_acknowledged = all([
+                policy_result.LeavePolicyAcknowledged,
+                policy_result.WorkFromHomePolicyAcknowledged,
+                policy_result.ExitPolicyAndProcessAcknowledged,
+                policy_result.SalaryAdvanceRecoveryPolicyAcknowledged,
+                policy_result.ProbationToConfirmationPolicyAcknowledged,
+                policy_result.SalaryAndAppraisalPolicyAcknowledged
+            ])
+
+            if not all_acknowledged:
+                return jsonify({'error': 'Not all policies are acknowledged'}), 400
+
+            # Prepare email
+            employee_name = f"{employee_result.FirstName} {employee_result.LastName}"
+            subject = f"Policy Acknowledgment - {employee_name}"
+            body = f"""
+            <html>
+                <body>
+                    <h3>Policy Acknowledgment Notification</h3>
+                    <p>Employee {employee_name} (ID: {employee_id}) has acknowledged all company policies.</p>
+                    <p>All policies have been read and acknowledged:</p>
+                    <ul>
+                        <li>Leave Policy</li>
+                        <li>Work From Home Policy</li>
+                        <li>Exit Policy & Process</li>
+                        <li>Salary Advance & Recovery Policy</li>
+                        <li>Probation To Confirmation Policy</li>
+                        <li>Salary and Appraisal Process Policy</li>
+                    </ul>
+                </body>
+            </html>
+            """
+
+            # Set up the email message
+            msg = MIMEMultipart()
+            msg['From'] = FROM_ADDRESS
+            msg['To'] = "gautambafna26@gmail.com"
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'html'))
+
+            # Send email
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(FROM_ADDRESS, FROM_PASSWORD)
+            server.sendmail(FROM_ADDRESS, ["gautambafna26@gmail.com"], msg.as_string())
+            server.quit()
+
+            return jsonify({
+                'message': 'Email sent successfully',
+                'employeeId': employee_id,
+                'employeeName': employee_name
+            }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)

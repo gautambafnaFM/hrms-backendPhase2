@@ -9,7 +9,10 @@ from flask_apscheduler import APScheduler
 load_dotenv()
 
 app = Flask(__name__)  # local build
-CORS(app, origins='*', supports_credentials=True)
+CORS(app, origins=[
+    "http://localhost:5173",
+    "https://hrms.flairminds.com"
+], supports_credentials=True)
 
 DATABASE = "HRMS"
 PASSWORD = os.getenv('PASSWORD')
