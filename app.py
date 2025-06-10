@@ -888,7 +888,7 @@ def update_policy_acknowledgment():
             'Exit Policy & Process': 'ExitPolicyAndProcessAcknowledged',
             'Salary Advance & Recovery Policy': 'SalaryAdvanceRecoveryPolicyAcknowledged',
             'Probation To Confirmation Policy': 'ProbationToConfirmationPolicyAcknowledged',
-            'Salary and appraisal process policy': 'SalaryAndAppraisalPolicyAcknowledged'
+            'Salary and appraisal process Policy': 'SalaryAndAppraisalPolicyAcknowledged'
         }
         
         if policy_name not in policy_column_map:
