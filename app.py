@@ -1023,7 +1023,7 @@ def send_policy_email():
             # Set up the email message
             msg = MIMEMultipart()
             msg['From'] = FROM_ADDRESS
-            msg['To'] = "gautambafna26@gmail.com"
+            msg['To'] = "hr@flairminds.com"
             msg['Subject'] = subject
             msg.attach(MIMEText(body, 'html'))
 
@@ -1031,7 +1031,7 @@ def send_policy_email():
             server = smtplib.SMTP('smtp.gmail.com', 587)
             server.starttls()
             server.login(FROM_ADDRESS, FROM_PASSWORD)
-            server.sendmail(FROM_ADDRESS, ["gautambafna26@gmail.com"], msg.as_string())
+            server.sendmail(FROM_ADDRESS, ["hr@flairminds.com"], msg.as_string())
             server.quit()
 
             return jsonify({
