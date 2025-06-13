@@ -539,12 +539,12 @@ def allowed_file(filename):
 def upload_document():
     try:
         emp_id = request.form.get("emp_id")
-        doc_type = request.form.get("doc_type")  # tenth, twelve, pan, adhar, grad
+        doc_type = request.form.get("doc_type")  # tenth, twelve, pan, adhar, grad, resume
 
         if not emp_id or not doc_type:
             return jsonify({"error": "Employee ID and document type are required"}), 400
 
-        if doc_type not in ["tenth", "twelve", "pan", "adhar", "grad"]:
+        if doc_type not in ["tenth", "twelve", "pan", "adhar", "grad", "resume"]:
             return jsonify({"error": "Invalid document type"}), 400
 
         if "file" not in request.files:
@@ -588,7 +588,7 @@ def upload_document():
 
 
 
-DOCUMENT_COLUMNS = {'tenth', 'twelve', 'pan', 'adhar', 'grad'}
+DOCUMENT_COLUMNS = {'tenth', 'twelve', 'pan', 'adhar', 'grad', 'resume'}
 
 @app.route('/api/get-document/<emp_id>/<doc_type>', methods=['GET'])
 def get_document(emp_id, doc_type):
@@ -651,7 +651,7 @@ def document_status(emp_id):
         # Fetch document details from the database
         result = db.session.execute(
             text("""
-                SELECT tenth, twelve, pan, adhar, grad
+                SELECT tenth, twelve, pan, adhar, grad, resume
                 FROM emp_documents
                 WHERE emp_id = :emp_id
             """),
@@ -668,7 +668,8 @@ def document_status(emp_id):
                 {"doc_type": "twelve", "uploaded": bool(result.twelve)},
                 {"doc_type": "adhar", "uploaded": bool(result.adhar)},
                 {"doc_type": "pan", "uploaded": bool(result.pan)},
-                {"doc_type": "grad", "uploaded": bool(result.grad)}
+                {"doc_type": "grad", "uploaded": bool(result.grad)},
+                {"doc_type": "resume", "uploaded": bool(result.resume)}
             ]
         }
 
@@ -1308,14 +1309,6 @@ def increment_address_counter(employee_id):
                 {'employee_id': employee_id}
             ).scalar() or 0
 
-            # Check if counter has reached limit
-            if current_counter >= 3:
-                return jsonify({
-                    'message': 'Counter limit reached',
-                    'employeeId': employee_id,
-                    'limitReached': True
-                }), 200
-
             # Update the counter for all addresses of the employee
             result = db.session.execute(
                 text("""
@@ -1332,8 +1325,29 @@ def increment_address_counter(employee_id):
             return jsonify({
                 'message': 'Counter incremented successfully',
                 'employeeId': employee_id,
-                'limitReached': False,
                 'currentCount': current_counter + 1
+            }), 200
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/get-address-counter/<employee_id>', methods=['GET'])
+def get_address_counter(employee_id):
+    try:
+        with db.session.begin():
+            # Get the current counter value
+            current_counter = db.session.execute(
+                text("""
+                    SELECT MAX(counter) as current_count
+                    FROM EmployeeAddress 
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).scalar() or 0
+                
+            return jsonify({
+                'employeeId': employee_id,
+                'counter': current_counter
             }), 200
             
     except Exception as e:
