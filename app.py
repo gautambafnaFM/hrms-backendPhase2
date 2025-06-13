@@ -1211,7 +1211,7 @@ def get_complete_employee_details(employee_id):
                     'ZipCode': addr.ZipCode
                 })
             
-            # Create document details dictionary
+            # Create document details dictionary and check for missing documents
             documents = {
                 'doc_id': document_result.doc_id if document_result else None,
                 'tenth': bool(document_result.tenth) if document_result else False,
@@ -1254,6 +1254,23 @@ def get_complete_employee_details(employee_id):
             if not skills:
                 missing_fields.append("Skills Information")
 
+            # Check for missing documents
+            if not document_result:
+                missing_fields.append("All Documents")
+            else:
+                if not document_result.tenth:
+                    missing_fields.append("10th Certificate")
+                if not document_result.twelve:
+                    missing_fields.append("12th Certificate")
+                if not document_result.pan:
+                    missing_fields.append("PAN Card")
+                if not document_result.adhar:
+                    missing_fields.append("Aadhar Card")
+                if not document_result.grad:
+                    missing_fields.append("Graduation Certificate")
+                if not document_result.resume:
+                    missing_fields.append("Resume")
+
             # Prepare response
             is_complete = len(missing_fields) == 0
             response = {
@@ -1273,6 +1290,51 @@ def get_complete_employee_details(employee_id):
             }
             
             return jsonify(response), 200
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/increment-address-counter/<employee_id>', methods=['POST'])
+def increment_address_counter(employee_id):
+    try:
+        with db.session.begin():
+            # First get the current counter value
+            current_counter = db.session.execute(
+                text("""
+                    SELECT MAX(counter) as current_count
+                    FROM EmployeeAddress 
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).scalar() or 0
+
+            # Check if counter has reached limit
+            if current_counter >= 3:
+                return jsonify({
+                    'message': 'Counter limit reached',
+                    'employeeId': employee_id,
+                    'limitReached': True
+                }), 200
+
+            # Update the counter for all addresses of the employee
+            result = db.session.execute(
+                text("""
+                    UPDATE EmployeeAddress 
+                    SET counter = ISNULL(counter, 0) + 1
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            )
+            
+            if result.rowcount == 0:
+                return jsonify({'error': 'No address found for employee'}), 404
+                
+            return jsonify({
+                'message': 'Counter incremented successfully',
+                'employeeId': employee_id,
+                'limitReached': False,
+                'currentCount': current_counter + 1
+            }), 200
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
