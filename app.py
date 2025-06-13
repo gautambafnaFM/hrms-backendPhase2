@@ -676,6 +676,7 @@ def document_status(emp_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 # Start the scheduler when the app runs
 
 @app.route("/api/all-employees", methods=["GET"])
@@ -1092,23 +1093,11 @@ def update_warning_count():
                         'warning_count': new_count
                     }
                 )
-
-            # If count exceeds 3, update employee status to Relieved
-            if new_count > 3:
-                db.session.execute(
-                    text("""
-                        UPDATE Employee 
-                        SET EmploymentStatus = 'Relieved'
-                        WHERE EmployeeId = :employee_id
-                    """),
-                    {'employee_id': employee_id}
-                )
                 
         return jsonify({
             'message': 'Warning count updated successfully',
             'employeeId': employee_id,
-            'warningCount': new_count,
-            'statusUpdated': new_count > 3
+            'warningCount': new_count
         }), 200
         
     except Exception as e:
@@ -1131,6 +1120,159 @@ def get_warning_count(employee_id):
                 return jsonify({'warningCount': 0}), 200
                 
             return jsonify({'warningCount': result.WarningCount}), 200
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/complete-employee-details/<employee_id>', methods=['GET'])
+def get_complete_employee_details(employee_id):
+    try:
+        with db.session.begin():
+            # Get employee details
+            employee_result = db.session.execute(
+                text("""
+                    SELECT 
+                        ContactNumber,
+                        EmergencyContactPerson,
+                        EmergencyContactRelation,
+                        EmergencyContactNumber,
+                        QualificationYearMonth,
+                        FullStackReady
+                    FROM Employee
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchone()
+            
+            if not employee_result:
+                return jsonify({'error': 'Employee not found'}), 404
+
+            # Get address details
+            address_result = db.session.execute(
+                text("""
+                    SELECT 
+                        AddressType,
+                        State,
+                        City,
+                        Address1,
+                        Address2,
+                        IsSamePermanant,
+                        ZipCode
+                    FROM EmployeeAddress
+                    WHERE EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchall()
+            
+            # Get document details
+            document_result = db.session.execute(
+                text("""
+                    SELECT 
+                        doc_id,
+                        tenth,
+                        twelve,
+                        pan,
+                        adhar,
+                        grad,
+                        resume
+                    FROM emp_documents
+                    WHERE emp_id = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchone()
+
+            # Get skills details
+            skills_result = db.session.execute(
+                text("""
+                    SELECT 
+                        es.SkillId,
+                        es.SkillLevel,
+                        es.isReady,
+                        es.isReadyDate,
+                        es.FullStackReady,
+                        s.SkillName
+                    FROM EmployeeSkill es
+                    LEFT JOIN Skill s ON es.SkillId = s.SkillId
+                    WHERE es.EmployeeId = :employee_id
+                """),
+                {'employee_id': employee_id}
+            ).fetchall()
+            
+            # Convert address results to list of dictionaries
+            addresses = []
+            for addr in address_result:
+                addresses.append({
+                    'AddressType': addr.AddressType,
+                    'State': addr.State,
+                    'City': addr.City,
+                    'Address1': addr.Address1,
+                    'Address2': addr.Address2,
+                    'IsSamePermanant': bool(addr.IsSamePermanant),
+                    'ZipCode': addr.ZipCode
+                })
+            
+            # Create document details dictionary
+            documents = {
+                'doc_id': document_result.doc_id if document_result else None,
+                'tenth': bool(document_result.tenth) if document_result else False,
+                'twelve': bool(document_result.twelve) if document_result else False,
+                'pan': bool(document_result.pan) if document_result else False,
+                'adhar': bool(document_result.adhar) if document_result else False,
+                'grad': bool(document_result.grad) if document_result else False,
+                'resume': bool(document_result.resume) if document_result else False
+            }
+
+            # Convert skills results to list of dictionaries
+            skills = []
+            for skill in skills_result:
+                skills.append({
+                    'SkillId': skill.SkillId,
+                    'SkillName': skill.SkillName,
+                    'SkillLevel': skill.SkillLevel,
+                    'isReady': bool(skill.isReady),
+                    'isReadyDate': skill.isReadyDate.strftime('%Y-%m-%d') if skill.isReadyDate else None,
+                    'FullStackReady': bool(skill.FullStackReady)
+                })
+
+            # Check for missing information
+            missing_fields = []
+            
+            if not employee_result.ContactNumber:
+                missing_fields.append("Contact Number")
+            if not employee_result.EmergencyContactPerson:
+                missing_fields.append("Emergency Contact Person")
+            if not employee_result.EmergencyContactRelation:
+                missing_fields.append("Emergency Contact Relation")
+            if not employee_result.EmergencyContactNumber:
+                missing_fields.append("Emergency Contact Number")
+            if not employee_result.QualificationYearMonth:
+                missing_fields.append("Qualification Year Month")
+            if employee_result.FullStackReady is None:
+                missing_fields.append("Full Stack Ready Status")
+            if not addresses:
+                missing_fields.append("Address Information")
+            if not skills:
+                missing_fields.append("Skills Information")
+
+            # Prepare response
+            is_complete = len(missing_fields) == 0
+            response = {
+                'status': is_complete,
+                'message': 'All information is complete' if is_complete else f'Missing information: {", ".join(missing_fields)}',
+                'data': {
+                    'ContactNumber': employee_result.ContactNumber if employee_result.ContactNumber else False,
+                    'EmergencyContactPerson': employee_result.EmergencyContactPerson if employee_result.EmergencyContactPerson else False,
+                    'EmergencyContactRelation': employee_result.EmergencyContactRelation if employee_result.EmergencyContactRelation else False,
+                    'EmergencyContactNumber': employee_result.EmergencyContactNumber if employee_result.EmergencyContactNumber else False,
+                    'QualificationYearMonth': employee_result.QualificationYearMonth if employee_result.QualificationYearMonth else False,
+                    'FullStackReady': bool(employee_result.FullStackReady) if employee_result.FullStackReady is not None else False,
+                    'Addresses': addresses if addresses else False,
+                    'Documents': documents,
+                    'Skills': skills if skills else False
+                }
+            }
+            
+            return jsonify(response), 200
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
