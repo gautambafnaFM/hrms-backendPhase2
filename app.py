@@ -743,7 +743,7 @@ def delete_document():
         if not emp_id or not doc_type:
             return jsonify({"error": "Employee ID and document type are required"}), 400
 
-        if doc_type not in ["tenth", "twelve", "pan", "adhar", "grad"]:
+        if doc_type not in ["tenth", "twelve", "pan", "adhar", "grad","resume"]:
             return jsonify({"error": "Invalid document type"}), 400
 
         # Set the specified document column to NULL in the database
