@@ -247,9 +247,122 @@ def employee_skills():
     data = get_employee_skills()
     return jsonify(data)
 
+# @app.route("/api/add-update-skills", methods=["POST"])
+# def add_or_update_skills():
+#     """API endpoint to add or update multiple skills for an employee, including isReady and isReadyDate."""
+#     try:
+#         data = request.json
+#         employee_id = data.get('EmployeeId')
+#         skills = data.get('skills', [])  # Expecting a list of skills
+#         qualification_year_month = data.get('QualificationYearMonth')  # New field
+#         full_stack_ready = data.get('FullStackReady', 0)  
+
+#         # Validate input
+#         if not employee_id or not skills:
+#             return jsonify({'error': 'EmployeeId and skills are required'}), 400
+
+#         if qualification_year_month:
+#             try:
+#                 datetime.strptime(qualification_year_month, "%Y-%m-%d")  # Validate format
+#             except ValueError:
+#                 return jsonify({'error': 'Invalid QualificationYearMonth format. Expected YYYY-MM.'}), 400
+
+#         with db.session.begin():
+#             if qualification_year_month:
+#                 db.session.execute(
+#                     text("""
+#                         UPDATE Employee 
+#                         SET QualificationYearMonth = :qualification_year_month
+#                         WHERE EmployeeId = :employee_id
+#                     """),
+#                     {'qualification_year_month': qualification_year_month, 'employee_id': employee_id}
+#                 )
+
+#         with db.session.begin():
+#             db.session.execute(
+#                 text("""
+#                     UPDATE Employee 
+#                     SET FullStackReady = :full_stack_ready
+#                     WHERE EmployeeId = :employee_id
+#                 """),
+#                 {'full_stack_ready': full_stack_ready, 'employee_id': employee_id}
+#             )
+       
+
+#         with db.session.begin():
+#             for skill in skills:
+#                 skill_id = skill.get('SkillId')
+#                 skill_level = skill.get('SkillLevel')
+#                 is_ready = skill.get('isReady', 0)  # Ensure it's an integer (0 or 1)
+#                 is_ready_date = skill.get('isReadyDate')
+
+#                 if not skill_id or not skill_level:
+#                     return jsonify({'error': 'Each skill must have SkillId and SkillLevel'}), 400
+
+#                 # ✅ Handle multiple date formats
+#                 if is_ready_date:
+#                     try:
+#                         if len(is_ready_date) == 10 and is_ready_date.count('-') == 2:
+#                             # Already in YYYY-MM-DD format
+#                             datetime.strptime(is_ready_date, "%Y-%m-%d")  # Validate
+#                         else:
+#                             # Convert from "Mon, 17 Feb 2025 00:00:00 GMT" → "YYYY-MM-DD"
+#                             is_ready_date = datetime.strptime(is_ready_date, "%a, %d %b %Y %H:%M:%S GMT").strftime("%Y-%m-%d")
+#                     except ValueError:
+#                         return jsonify({'error': f'Invalid date format: {is_ready_date}. Expected "YYYY-MM-DD" or "Mon, 17 Feb 2025 00:00:00 GMT".'}), 400
+#                 else:
+#                     is_ready_date = datetime.utcnow().strftime('%Y-%m-%d')  # Default to today's date
+
+#                 # Check if the skill already exists for this employee
+#                 result = db.session.execute(
+#                     text("""
+#                         SELECT COUNT(*) FROM EmployeeSkill 
+#                         WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+#                     """),
+#                     {'employee_id': employee_id, 'skill_id': skill_id}
+#                 ).scalar()
+
+#                 if result > 0:
+#                     # Update the existing skill
+#                     db.session.execute(
+#                         text("""
+#                             UPDATE EmployeeSkill 
+#                             SET SkillLevel = :skill_level, isReady = :is_ready, isReadyDate = :is_ready_date
+#                             WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+#                         """),
+#                         {
+#                             'employee_id': employee_id,
+#                             'skill_id': skill_id,
+#                             'skill_level': skill_level,
+#                             'is_ready': is_ready,
+#                             'is_ready_date': is_ready_date
+#                         }
+#                     )
+#                 else:
+#                     # Insert new skill
+#                     db.session.execute(
+#                         text("""
+#                             INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, isReadyDate)
+#                             VALUES (:employee_id, :skill_id, :skill_level, :is_ready, :is_ready_date)
+#                         """),
+#                         {
+#                             'employee_id': employee_id,
+#                             'skill_id': skill_id,
+#                             'skill_level': skill_level,
+#                             'is_ready': is_ready,
+#                             'is_ready_date': is_ready_date
+#                         }
+#                     )
+
+#         return jsonify({'message': 'Skills added/updated successfully'}), 201
+
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+
+
 @app.route("/api/add-update-skills", methods=["POST"])
 def add_or_update_skills():
-    """API endpoint to add or update multiple skills for an employee, including isReady and isReadyDate."""
+    """API endpoint to add or update multiple skills for an employee, including isReady, isReadyDate, and SelfEvaluation."""
     try:
         data = request.json
         employee_id = data.get('EmployeeId')
@@ -257,7 +370,6 @@ def add_or_update_skills():
         qualification_year_month = data.get('QualificationYearMonth')  # New field
         full_stack_ready = data.get('FullStackReady', 0)  
 
-        # Validate input
         if not employee_id or not skills:
             return jsonify({'error': 'EmployeeId and skills are required'}), 400
 
@@ -288,32 +400,31 @@ def add_or_update_skills():
                 {'full_stack_ready': full_stack_ready, 'employee_id': employee_id}
             )
        
-
         with db.session.begin():
             for skill in skills:
                 skill_id = skill.get('SkillId')
                 skill_level = skill.get('SkillLevel')
-                is_ready = skill.get('isReady', 0)  # Ensure it's an integer (0 or 1)
+                is_ready = skill.get('isReady', 0)
                 is_ready_date = skill.get('isReadyDate')
+                self_evaluation = skill.get('SelfEvaluation')  # 🆕 NEW FIELD
 
                 if not skill_id or not skill_level:
                     return jsonify({'error': 'Each skill must have SkillId and SkillLevel'}), 400
 
-                # ✅ Handle multiple date formats
                 if is_ready_date:
                     try:
                         if len(is_ready_date) == 10 and is_ready_date.count('-') == 2:
-                            # Already in YYYY-MM-DD format
-                            datetime.strptime(is_ready_date, "%Y-%m-%d")  # Validate
+                            datetime.strptime(is_ready_date, "%Y-%m-%d")
                         else:
-                            # Convert from "Mon, 17 Feb 2025 00:00:00 GMT" → "YYYY-MM-DD"
-                            is_ready_date = datetime.strptime(is_ready_date, "%a, %d %b %Y %H:%M:%S GMT").strftime("%Y-%m-%d")
+                            is_ready_date = datetime.strptime(
+                                is_ready_date, "%a, %d %b %Y %H:%M:%S GMT"
+                            ).strftime("%Y-%m-%d")
                     except ValueError:
-                        return jsonify({'error': f'Invalid date format: {is_ready_date}. Expected "YYYY-MM-DD" or "Mon, 17 Feb 2025 00:00:00 GMT".'}), 400
+                        return jsonify({'error': f'Invalid date format: {is_ready_date}'}), 400
                 else:
-                    is_ready_date = datetime.utcnow().strftime('%Y-%m-%d')  # Default to today's date
+                    is_ready_date = datetime.utcnow().strftime('%Y-%m-%d')
 
-                # Check if the skill already exists for this employee
+                # Check if the skill already exists
                 result = db.session.execute(
                     text("""
                         SELECT COUNT(*) FROM EmployeeSkill 
@@ -323,11 +434,14 @@ def add_or_update_skills():
                 ).scalar()
 
                 if result > 0:
-                    # Update the existing skill
+                    # ✅ UPDATE including SelfEvaluation
                     db.session.execute(
                         text("""
                             UPDATE EmployeeSkill 
-                            SET SkillLevel = :skill_level, isReady = :is_ready, isReadyDate = :is_ready_date
+                            SET SkillLevel = :skill_level,
+                                isReady = :is_ready,
+                                isReadyDate = :is_ready_date,
+                                SelfEvaluation = :self_evaluation
                             WHERE EmployeeId = :employee_id AND SkillId = :skill_id
                         """),
                         {
@@ -335,22 +449,24 @@ def add_or_update_skills():
                             'skill_id': skill_id,
                             'skill_level': skill_level,
                             'is_ready': is_ready,
-                            'is_ready_date': is_ready_date
+                            'is_ready_date': is_ready_date,
+                            'self_evaluation': self_evaluation
                         }
                     )
                 else:
-                    # Insert new skill
+                    # ✅ INSERT including SelfEvaluation
                     db.session.execute(
                         text("""
-                            INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, isReadyDate)
-                            VALUES (:employee_id, :skill_id, :skill_level, :is_ready, :is_ready_date)
+                            INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, isReadyDate, SelfEvaluation)
+                            VALUES (:employee_id, :skill_id, :skill_level, :is_ready, :is_ready_date, :self_evaluation)
                         """),
                         {
                             'employee_id': employee_id,
                             'skill_id': skill_id,
                             'skill_level': skill_level,
                             'is_ready': is_ready,
-                            'is_ready_date': is_ready_date
+                            'is_ready_date': is_ready_date,
+                            'self_evaluation': self_evaluation
                         }
                     )
 
