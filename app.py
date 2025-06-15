@@ -811,7 +811,8 @@ def get_all_employees():
                 ed.twelve, 
                 ed.pan, 
                 ed.adhar, 
-                ed.grad 
+                ed.grad,
+                ed.resume
             FROM emp_documents ed
             JOIN Employee e ON ed.emp_id = e.EmployeeId
         """)
@@ -829,6 +830,7 @@ def get_all_employees():
                 "pan": bool(row.pan),
                 "adhar": bool(row.adhar),
                 "grad": bool(row.grad),
+                "resume":bool(row.resume),
             })
 
         return jsonify(employees), 200
@@ -1472,6 +1474,149 @@ def get_address_counter(employee_id):
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/verify-document', methods=['POST'])
+def verify_document():
+    try:
+        data = request.get_json()
+        emp_id = data.get('emp_id')
+        doc_type = data.get('doc_type')
+        is_verified = data.get('is_verified')
+
+        if not all([emp_id, doc_type, is_verified is not None]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+
+        # Map frontend doc_type to database column names
+        doc_type_map = {
+            'tenth': 'tenth',
+            'twelve': 'twelve',
+            'pan': 'pan',
+            'adhar': 'adhar',
+            'grad': 'grad',
+            'resume': 'resume'
+        }
+
+        if doc_type not in doc_type_map:
+            return jsonify({'error': 'Invalid document type'}), 400
+
+        db_column = doc_type_map[doc_type]
+        verified_column = f"{db_column}_verified"
+
+        with db.engine.begin() as conn:  # assumes you're using SQLAlchemy
+            if is_verified:
+                query = f"""
+                    UPDATE emp_documents 
+                    SET {verified_column} = 1
+                    WHERE emp_id = :emp_id
+                """
+                conn.execute(text(query), {'emp_id': emp_id})
+            else:
+                query = f"""
+                    UPDATE emp_documents 
+                    SET {db_column} = NULL,
+                        {verified_column} = 0
+                    WHERE emp_id = :emp_id
+                """
+                conn.execute(text(query), {'emp_id': emp_id})
+
+        return jsonify({'message': 'Document verification status updated successfully'}), 200
+
+    except Exception as e:
+        print(f"Error in verify_document: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+    try:
+        data = request.get_json()
+        emp_id = data.get('emp_id')
+        doc_type = data.get('doc_type')
+        is_verified = data.get('is_verified')
+
+        if not all([emp_id, doc_type, is_verified is not None]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+
+        # Map frontend doc_type to database column names
+        doc_type_map = {
+            'tenth': 'tenth',
+            'twelve': 'twelve',
+            'pan': 'pan',
+            'adhar': 'adhar',
+            'grad': 'grad',
+            'resume': 'resume'
+        }
+
+        if doc_type not in doc_type_map:
+            return jsonify({'error': 'Invalid document type'}), 400
+
+        db_column = doc_type_map[doc_type]
+        verified_column = f"{db_column}_verified"
+
+        if is_verified:
+            # If accepting, just update the verification status
+            query = f"""
+                UPDATE emp_documents 
+                SET {verified_column} = 1
+                WHERE emp_id = ?
+            """
+            conn.execute(query, (emp_id,))
+        else:
+            # If rejecting, set document and verification status to NULL/false
+            query = f"""
+                UPDATE emp_documents 
+                SET {db_column} = NULL,
+                    {verified_column} = 0
+                WHERE emp_id = ?
+            """
+            conn.execute(query, (emp_id,))
+
+        conn.commit()
+        return jsonify({'message': 'Document verification status updated successfully'}), 200
+
+    except Exception as e:
+        print(f"Error in verify_document: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/document-verification-status/<emp_id>', methods=['GET'])
+def get_document_verification_status(emp_id):
+    try:
+        with db.session.begin():
+            result = db.session.execute(
+                text("""
+                    SELECT 
+                        doc_id,
+                        emp_id,
+                        tenth_verified,
+                        twelve_verified,
+                        pan_verified,
+                        adhar_verified,
+                        grad_verified,
+                        resume_verified
+                    FROM emp_documents
+                    WHERE emp_id = :emp_id
+                """),
+                {'emp_id': emp_id}
+            ).fetchone()
+
+            if not result:
+                return jsonify({"error": "Employee documents not found"}), 404
+
+            verification_status = {
+                "doc_id": result.doc_id,
+                "emp_id": result.emp_id,
+                "documents": {
+                    "tenth": result.tenth_verified,
+                    "twelve": result.twelve_verified,
+                    "pan": result.pan_verified,
+                    "adhar": result.adhar_verified,
+                    "grad": result.grad_verified,
+                    "resume": result.resume_verified
+                }
+            }
+
+            return jsonify(verification_status), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
