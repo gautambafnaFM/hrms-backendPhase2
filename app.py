@@ -1158,7 +1158,8 @@ def get_complete_employee_details(employee_id):
                         Address1,
                         Address2,
                         IsSamePermanant,
-                        ZipCode
+                        ZipCode,
+                        counter
                     FROM EmployeeAddress
                     WHERE EmployeeId = :employee_id
                 """),
@@ -1209,7 +1210,8 @@ def get_complete_employee_details(employee_id):
                     'Address1': addr.Address1,
                     'Address2': addr.Address2,
                     'IsSamePermanant': bool(addr.IsSamePermanant),
-                    'ZipCode': addr.ZipCode
+                    'ZipCode': addr.ZipCode,
+                    'counter': addr.counter 
                 })
             
             # Create document details dictionary and check for missing documents
