@@ -484,7 +484,7 @@ def get_employee_skills(employee_id):
             result = db.session.execute(
                 text("""
                     SELECT e.EmployeeId, e.QualificationYearMonth, e.FullStackReady, 
-                           es.SkillId, es.SkillLevel, 
+                           es.SkillId, es.SkillLevel, es.SelfEvaluation, 
                            s.SkillName, es.isReady, es.isReadyDate
                     FROM Employee e
                     LEFT JOIN EmployeeSkill es ON e.EmployeeId = es.EmployeeId
@@ -515,7 +515,8 @@ def get_employee_skills(employee_id):
                         "SkillLevel": row_dict["SkillLevel"],
                         "SkillName": row_dict["SkillName"],
                         "isReady": int(row_dict["isReady"]),
-                        "isReadyDate": row_dict["isReadyDate"]
+                        "isReadyDate": row_dict["isReadyDate"],
+                        "SelfEvaluation": row_dict["SelfEvaluation"]
                     })
 
         return jsonify({
@@ -536,7 +537,7 @@ def get_employees():
                 SELECT 
                     e.EmployeeId, e.FirstName, e.LastName, e.DateOfJoining,
                     e.TeamLeadId, e.SubRole, e.LobLead, e.IsLead, e.FullStackReady, 
-                    es.SkillId, s.SkillName, es.SkillLevel, es.isReady, es.isReadyDate
+                    es.SkillId, s.SkillName, es.SkillLevel, es.isReady, es.isReadyDate, es.SelfEvaluation
                 FROM HRMS.dbo.Employee e
                 LEFT JOIN HRMS.dbo.EmployeeSkill es ON e.EmployeeId = es.EmployeeId
                 LEFT JOIN HRMS.dbo.Skill s ON es.SkillId = s.SkillId
@@ -569,7 +570,8 @@ def get_employees():
                 "SkillId": row["SkillId"],
                 "SkillName": row["SkillName"],
                 "isReady": row["isReady"],
-                "isReadyDate": row["isReadyDate"].strftime("%a, %d %b %Y %H:%M:%S GMT") if row["isReadyDate"] else None
+                "isReadyDate": row["isReadyDate"],
+                "SelfEvaluation": row["SelfEvaluation"]
             }
 
             if row["SkillLevel"] == "Primary":
