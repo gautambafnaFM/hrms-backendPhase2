@@ -684,12 +684,13 @@ def upload_document():
         with open(filepath, "rb") as f:
             file_blob = f.read()
 
-        # Save to database
+        # Save to database and set verification status to NULL
         with db.session.begin():
             db.session.execute(
                 text(f"""
                     UPDATE emp_documents
-                    SET {doc_type} = :file_blob
+                    SET {doc_type} = :file_blob,
+                        {doc_type}_verified = NULL
                     WHERE emp_id = :emp_id
                 """),
                 {"file_blob": file_blob, "emp_id": emp_id},
@@ -1525,56 +1526,6 @@ def verify_document():
         print(f"Error in verify_document: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-    try:
-        data = request.get_json()
-        emp_id = data.get('emp_id')
-        doc_type = data.get('doc_type')
-        is_verified = data.get('is_verified')
-
-        if not all([emp_id, doc_type, is_verified is not None]):
-            return jsonify({'error': 'Missing required parameters'}), 400
-
-        # Map frontend doc_type to database column names
-        doc_type_map = {
-            'tenth': 'tenth',
-            'twelve': 'twelve',
-            'pan': 'pan',
-            'adhar': 'adhar',
-            'grad': 'grad',
-            'resume': 'resume'
-        }
-
-        if doc_type not in doc_type_map:
-            return jsonify({'error': 'Invalid document type'}), 400
-
-        db_column = doc_type_map[doc_type]
-        verified_column = f"{db_column}_verified"
-
-        if is_verified:
-            # If accepting, just update the verification status
-            query = f"""
-                UPDATE emp_documents 
-                SET {verified_column} = 1
-                WHERE emp_id = ?
-            """
-            conn.execute(query, (emp_id,))
-        else:
-            # If rejecting, set document and verification status to NULL/false
-            query = f"""
-                UPDATE emp_documents 
-                SET {db_column} = NULL,
-                    {verified_column} = 0
-                WHERE emp_id = ?
-            """
-            conn.execute(query, (emp_id,))
-
-        conn.commit()
-        return jsonify({'message': 'Document verification status updated successfully'}), 200
-
-    except Exception as e:
-        print(f"Error in verify_document: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
 @app.route('/api/document-verification-status/<emp_id>', methods=['GET'])
 def get_document_verification_status(emp_id):
     try:
@@ -1617,6 +1568,83 @@ def get_document_verification_status(emp_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/document-status-details/<emp_id>', methods=['GET'])
+def get_document_status_details(emp_id):
+    try:
+        with db.session.begin():
+            result = db.session.execute(
+                text("""
+                    SELECT TOP (1000) 
+                        doc_id,
+                        emp_id,
+                        tenth,
+                        twelve,
+                        pan,
+                        adhar,
+                        grad,
+                        resume,
+                        tenth_verified,
+                        twelve_verified,
+                        pan_verified,
+                        adhar_verified,
+                        grad_verified,
+                        resume_verified
+                    FROM [HRMS].[dbo].[emp_documents]
+                    WHERE emp_id = :emp_id
+                """),
+                {'emp_id': emp_id}
+            )
+            
+            row = result.fetchone()
+            if not row:
+                return jsonify({'error': 'No documents found for this employee'}), 404
+
+            def get_document_status(doc, verified):
+                if not doc and verified is None:
+                    return 'Not Uploaded'
+                if verified == 1 and doc is not None:
+                    return 'Accepted'
+                if verified == 0 and doc is not None:
+                    return 'Rejected'
+                if verified is None:
+                    return 'Pending'
+                return 'Rejected'
+
+            doc_status = {
+                'doc_id': row.doc_id,
+                'emp_id': row.emp_id,
+                'documents': {
+                    'tenth': {
+                        'uploaded': bool(row.tenth),
+                        'status': get_document_status(row.tenth, row.tenth_verified)
+                    },
+                    'twelve': {
+                        'uploaded': bool(row.twelve),
+                        'status': get_document_status(row.twelve, row.twelve_verified)
+                    },
+                    'pan': {
+                        'uploaded': bool(row.pan),
+                        'status': get_document_status(row.pan, row.pan_verified)
+                    },
+                    'adhar': {
+                        'uploaded': bool(row.adhar),
+                        'status': get_document_status(row.adhar, row.adhar_verified)
+                    },
+                    'grad': {
+                        'uploaded': bool(row.grad),
+                        'status': get_document_status(row.grad, row.grad_verified)
+                    },
+                    'resume': {
+                        'uploaded': bool(row.resume),
+                        'status': get_document_status(row.resume, row.resume_verified)
+                    }
+                }
+            }
+
+            return jsonify(doc_status), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
