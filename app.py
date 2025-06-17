@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 
 
-TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com"]
+TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com", "Parag.Khandekar@flairminds.com"]
 # TO_ADDRESSES="gautam.bafna@flairminds.com"
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
