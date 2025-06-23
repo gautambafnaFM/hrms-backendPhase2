@@ -20,10 +20,12 @@ from werkzeug.utils import secure_filename
 TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com", "Parag.Khandekar@flairminds.com"]
 # TO_ADDRESSES="gautam.bafna@flairminds.com"
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
-@scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
-@scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
+# @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
+# @scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
+@scheduler.task('cron', id='send_employees_in_office_email', hour=5, minute=00)
+@scheduler.task('cron', id='send_employees_in_office_email2', hour=7, minute=00)
 
-
+# @app.route('/api/leave-records-mail', methods=['GET'])
 def send_leave_email01():
     print("IN")
     with scheduler.app.app_context():
@@ -246,118 +248,6 @@ def get_employee_skills():
 def employee_skills():
     data = get_employee_skills()
     return jsonify(data)
-
-# @app.route("/api/add-update-skills", methods=["POST"])
-# def add_or_update_skills():
-#     """API endpoint to add or update multiple skills for an employee, including isReady and isReadyDate."""
-#     try:
-#         data = request.json
-#         employee_id = data.get('EmployeeId')
-#         skills = data.get('skills', [])  # Expecting a list of skills
-#         qualification_year_month = data.get('QualificationYearMonth')  # New field
-#         full_stack_ready = data.get('FullStackReady', 0)  
-
-#         # Validate input
-#         if not employee_id or not skills:
-#             return jsonify({'error': 'EmployeeId and skills are required'}), 400
-
-#         if qualification_year_month:
-#             try:
-#                 datetime.strptime(qualification_year_month, "%Y-%m-%d")  # Validate format
-#             except ValueError:
-#                 return jsonify({'error': 'Invalid QualificationYearMonth format. Expected YYYY-MM.'}), 400
-
-#         with db.session.begin():
-#             if qualification_year_month:
-#                 db.session.execute(
-#                     text("""
-#                         UPDATE Employee 
-#                         SET QualificationYearMonth = :qualification_year_month
-#                         WHERE EmployeeId = :employee_id
-#                     """),
-#                     {'qualification_year_month': qualification_year_month, 'employee_id': employee_id}
-#                 )
-
-#         with db.session.begin():
-#             db.session.execute(
-#                 text("""
-#                     UPDATE Employee 
-#                     SET FullStackReady = :full_stack_ready
-#                     WHERE EmployeeId = :employee_id
-#                 """),
-#                 {'full_stack_ready': full_stack_ready, 'employee_id': employee_id}
-#             )
-       
-
-#         with db.session.begin():
-#             for skill in skills:
-#                 skill_id = skill.get('SkillId')
-#                 skill_level = skill.get('SkillLevel')
-#                 is_ready = skill.get('isReady', 0)  # Ensure it's an integer (0 or 1)
-#                 is_ready_date = skill.get('isReadyDate')
-
-#                 if not skill_id or not skill_level:
-#                     return jsonify({'error': 'Each skill must have SkillId and SkillLevel'}), 400
-
-#                 # ✅ Handle multiple date formats
-#                 if is_ready_date:
-#                     try:
-#                         if len(is_ready_date) == 10 and is_ready_date.count('-') == 2:
-#                             # Already in YYYY-MM-DD format
-#                             datetime.strptime(is_ready_date, "%Y-%m-%d")  # Validate
-#                         else:
-#                             # Convert from "Mon, 17 Feb 2025 00:00:00 GMT" → "YYYY-MM-DD"
-#                             is_ready_date = datetime.strptime(is_ready_date, "%a, %d %b %Y %H:%M:%S GMT").strftime("%Y-%m-%d")
-#                     except ValueError:
-#                         return jsonify({'error': f'Invalid date format: {is_ready_date}. Expected "YYYY-MM-DD" or "Mon, 17 Feb 2025 00:00:00 GMT".'}), 400
-#                 else:
-#                     is_ready_date = datetime.utcnow().strftime('%Y-%m-%d')  # Default to today's date
-
-#                 # Check if the skill already exists for this employee
-#                 result = db.session.execute(
-#                     text("""
-#                         SELECT COUNT(*) FROM EmployeeSkill 
-#                         WHERE EmployeeId = :employee_id AND SkillId = :skill_id
-#                     """),
-#                     {'employee_id': employee_id, 'skill_id': skill_id}
-#                 ).scalar()
-
-#                 if result > 0:
-#                     # Update the existing skill
-#                     db.session.execute(
-#                         text("""
-#                             UPDATE EmployeeSkill 
-#                             SET SkillLevel = :skill_level, isReady = :is_ready, isReadyDate = :is_ready_date
-#                             WHERE EmployeeId = :employee_id AND SkillId = :skill_id
-#                         """),
-#                         {
-#                             'employee_id': employee_id,
-#                             'skill_id': skill_id,
-#                             'skill_level': skill_level,
-#                             'is_ready': is_ready,
-#                             'is_ready_date': is_ready_date
-#                         }
-#                     )
-#                 else:
-#                     # Insert new skill
-#                     db.session.execute(
-#                         text("""
-#                             INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, isReadyDate)
-#                             VALUES (:employee_id, :skill_id, :skill_level, :is_ready, :is_ready_date)
-#                         """),
-#                         {
-#                             'employee_id': employee_id,
-#                             'skill_id': skill_id,
-#                             'skill_level': skill_level,
-#                             'is_ready': is_ready,
-#                             'is_ready_date': is_ready_date
-#                         }
-#                     )
-
-#         return jsonify({'message': 'Skills added/updated successfully'}), 201
-
-#     except Exception as e:
-#         return jsonify({'error': str(e)}), 500
 
 
 @app.route("/api/add-update-skills", methods=["POST"])
@@ -1645,6 +1535,432 @@ def get_document_status_details(emp_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/incomplete-employees', methods=['GET'])
+def get_incomplete_employees():
+    try:
+        with db.session.begin():
+            # Get all employees with their basic information
+            employees_result = db.session.execute(
+                text("""
+                    SELECT TOP (1000) 
+                        e.EmployeeId,
+                        e.FirstName,
+                        e.MiddleName,
+                        e.LastName,
+                        e.DateOfBirth,
+                        e.ContactNumber,
+                        e.EmergencyContactNumber,
+                        e.EmergencyContactPerson,
+                        e.EmergencyContactRelation,
+                        e.Email,
+                        e.Gender,
+                        e.BloodGroup,
+                        e.DateOfJoining,
+                        e.CTC,
+                        e.TeamLeadId,
+                        e.HighestQualification,
+                        e.EmploymentStatus,
+                        e.PersonalEmail,
+                        e.SubRole,
+                        e.LobLead,
+                        e.IsLead,
+                        e.QualificationYearMonth,
+                        e.FullStackReady
+                    FROM Employee e
+                """)
+            ).fetchall()
+            
+            incomplete_employees = []
+            
+            for employee in employees_result:
+                employee_id = employee.EmployeeId
+                
+                # Check if employee has addresses
+                address_count = db.session.execute(
+                    text("SELECT COUNT(*) FROM EmployeeAddress WHERE EmployeeId = :employee_id"),
+                    {'employee_id': employee_id}
+                ).scalar()
+                
+                # Check if employee has skills
+                skills_count = db.session.execute(
+                    text("SELECT COUNT(*) FROM EmployeeSkill WHERE EmployeeId = :employee_id"),
+                    {'employee_id': employee_id}
+                ).scalar()
+                
+                # Check if employee has documents
+                document_result = db.session.execute(
+                    text("""
+                        SELECT 
+                            tenth, twelve, pan, adhar, grad, resume
+                        FROM emp_documents
+                        WHERE emp_id = :employee_id
+                    """),
+                    {'employee_id': employee_id}
+                ).fetchone()
+                
+                # Check for missing information
+                missing_fields = []
+                
+                if not employee.ContactNumber:
+                    missing_fields.append("Contact Number")
+                if not employee.EmergencyContactPerson:
+                    missing_fields.append("Emergency Contact Person")
+                if not employee.EmergencyContactRelation:
+                    missing_fields.append("Emergency Contact Relation")
+                if not employee.EmergencyContactNumber:
+                    missing_fields.append("Emergency Contact Number")
+                if not employee.QualificationYearMonth:
+                    missing_fields.append("Qualification Year Month")
+                if employee.FullStackReady is None:
+                    missing_fields.append("Full Stack Ready Status")
+                if address_count == 0:
+                    missing_fields.append("Address Information")
+                if skills_count == 0:
+                    missing_fields.append("Skills Information")
+                
+                # Check for missing documents
+                if not document_result:
+                    missing_fields.append("All Documents")
+                else:
+                    if not document_result.tenth:
+                        missing_fields.append("10th Certificate")
+                    if not document_result.twelve:
+                        missing_fields.append("12th Certificate")
+                    if not document_result.pan:
+                        missing_fields.append("PAN Card")
+                    if not document_result.adhar:
+                        missing_fields.append("Aadhar Card")
+                    if not document_result.grad:
+                        missing_fields.append("Graduation Certificate")
+                    if not document_result.resume:
+                        missing_fields.append("Resume")
+                
+                # If there are missing fields, add to incomplete list
+                if missing_fields:
+                    # Helper function to safely format dates
+                    def format_date(date_value):
+                        if date_value is None:
+                            return None
+                        if isinstance(date_value, str):
+                            return date_value
+                        try:
+                            return date_value.strftime('%Y-%m-%d')
+                        except:
+                            return str(date_value) if date_value else None
+                    
+                    incomplete_employees.append({
+                        'EmployeeId': employee.EmployeeId,
+                        'FirstName': employee.FirstName
+                    })
+            
+            return jsonify({
+                'status': 'success',
+                'total_incomplete_employees': len(incomplete_employees),
+                'employees': incomplete_employees
+            }), 200
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def send_employees_in_office_email():
+    print("Sending Employees In Office Email...")
+    with scheduler.app.app_context():
+        try:
+            current_date = datetime.today()
+            if current_date.weekday() == 5:
+                current_date += timedelta(days=2)
+            elif current_date.weekday() == 6:
+                current_date += timedelta(days=1)
+            # Use today's date for the report
+            current_date_str = current_date.strftime('%Y-%m-%d')
+
+            with db.session.begin():
+                all_employees_result = db.session.execute(
+                    text("""
+                        SELECT 
+                            EmployeeId,
+                            FirstName,
+                            MiddleName,
+                            LastName,
+                            EmploymentStatus
+                        FROM Employee
+                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee')
+                    """)
+                ).fetchall()
+
+                leave_result = db.session.execute(
+                    text("""
+                        SELECT DISTINCT
+                            e.EmployeeId,
+                            e.FirstName,
+                            e.LastName,
+                            lt.fromDate,
+                            lt.ToDate,
+                            lt.LeaveStatus,
+                            ltm.LeaveName
+                        FROM LeaveTransaction lt
+                        JOIN Employee e ON lt.AppliedBy = e.EmployeeId
+                        JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID
+                        WHERE :date BETWEEN lt.fromDate AND lt.ToDate
+                        AND lt.LeaveStatus != 'Cancel'
+                    """),
+                    {"date": current_date_str}
+                ).fetchall()
+
+                employees_on_leave = {row.EmployeeId for row in leave_result}
+
+                employees_in_office = []
+                for emp in all_employees_result:
+                    if emp.EmployeeId not in employees_on_leave:
+                        full_name = " ".join(filter(None, [emp.FirstName, emp.MiddleName, emp.LastName]))
+                        employees_in_office.append({
+                            'EmployeeId': emp.EmployeeId,
+                            'FullName': full_name,
+                            'EmploymentStatus': emp.EmploymentStatus
+                        })
+
+                # Tables
+                summary_table = f"""
+                    <table border='1' style='border-collapse: collapse; text-align: left; margin-bottom: 20px;'>
+                        <tr>
+                            <th>Date</th>
+                            <th>Total Employees In Office</th>
+                            <th>Total Employees On Leave</th>
+                        </tr>
+                        <tr>
+                            <td>{current_date_str}</td>
+                            <td>{len(employees_in_office)}</td>
+                            <td>{len(employees_on_leave)}</td>
+                        </tr>
+                    </table>
+                """
+
+                employees_table = """
+                    <table border='1' style='border-collapse: collapse; text-align: left;'>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Full Name</th>
+                            <th>Employment Status</th>
+                        </tr>
+                """
+                for emp in employees_in_office:
+                    employees_table += f"""
+                        <tr>
+                            <td>{emp['EmployeeId']}</td>
+                            <td>{emp['FullName']}</td>
+                            <td>{emp['EmploymentStatus']}</td>
+                        </tr>
+                    """
+                employees_table += "</table>"
+
+                leave_table = """
+                    <table border='1' style='border-collapse: collapse; text-align: left;'>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Full Name</th>
+                            <th>From Date</th>
+                            <th>To Date</th>
+                            <th>Leave Status</th>
+                            <th>Leave Type</th>
+                        </tr>
+                """
+                for leave_emp in leave_result:
+                    full_name = " ".join(filter(None, [leave_emp.FirstName, leave_emp.LastName]))
+                    leave_table += f"""
+                        <tr>
+                            <td>{leave_emp.EmployeeId}</td>
+                            <td>{full_name}</td>
+                            <td>{leave_emp.fromDate.strftime('%Y-%m-%d')}</td>
+                            <td>{leave_emp.ToDate.strftime('%Y-%m-%d')}</td>
+                            <td>{leave_emp.LeaveStatus}</td>
+                            <td>{leave_emp.LeaveName}</td>
+                        </tr>
+                    """
+                leave_table += "</table>"
+
+                # Email content
+                subject = f"Employees In Office Report - {current_date_str}"
+                body = f"""
+                    <html>
+                        <body>
+                            <h3>Employees In Office Report - {current_date_str}</h3>
+                            {summary_table}
+                            <h4>Employees Currently In Office:</h4>
+                            {employees_table}
+                            <h4>Employees On Leave:</h4>
+                            {leave_table}
+                        </body>
+                    </html>
+                """
+
+                # Send email
+                msg = MIMEMultipart()
+                msg['From'] = FROM_ADDRESS
+                msg['To'] = ", ".join(TO_ADDRESSES)
+                msg['Subject'] = subject
+                msg.attach(MIMEText(body, 'html'))
+
+                server = smtplib.SMTP('smtp.gmail.com', 587)
+                server.starttls()
+                server.login(FROM_ADDRESS, FROM_PASSWORD)
+                server.sendmail(FROM_ADDRESS, TO_ADDRESSES, msg.as_string())
+                server.quit()
+                print("Email sent successfully!")
+
+        except Exception as e:
+            print(f"Error on line {e.__traceback__.tb_lineno} inside {__file__}\nFailed to send email: {str(e)}")
+
+
+
+def send_employees_in_office_email2():
+    print("Sending Employees In Office Email...")
+    with scheduler.app.app_context():
+        try:
+            current_date = datetime.today()
+            if current_date.weekday() == 5:
+                current_date += timedelta(days=2)
+            elif current_date.weekday() == 6:
+                current_date += timedelta(days=1)
+            # Use today's date for the report
+            current_date_str = current_date.strftime('%Y-%m-%d')
+
+            with db.session.begin():
+                all_employees_result = db.session.execute(
+                    text("""
+                        SELECT 
+                            EmployeeId,
+                            FirstName,
+                            MiddleName,
+                            LastName,
+                            EmploymentStatus
+                        FROM Employee
+                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee')
+                    """)
+                ).fetchall()
+
+                leave_result = db.session.execute(
+                    text("""
+                        SELECT DISTINCT
+                            e.EmployeeId,
+                            e.FirstName,
+                            e.LastName,
+                            lt.fromDate,
+                            lt.ToDate,
+                            lt.LeaveStatus,
+                            ltm.LeaveName
+                        FROM LeaveTransaction lt
+                        JOIN Employee e ON lt.AppliedBy = e.EmployeeId
+                        JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID
+                        WHERE :date BETWEEN lt.fromDate AND lt.ToDate
+                        AND lt.LeaveStatus != 'Cancel'
+                    """),
+                    {"date": current_date_str}
+                ).fetchall()
+
+                employees_on_leave = {row.EmployeeId for row in leave_result}
+
+                employees_in_office = []
+                for emp in all_employees_result:
+                    if emp.EmployeeId not in employees_on_leave:
+                        full_name = " ".join(filter(None, [emp.FirstName, emp.MiddleName, emp.LastName]))
+                        employees_in_office.append({
+                            'EmployeeId': emp.EmployeeId,
+                            'FullName': full_name,
+                            'EmploymentStatus': emp.EmploymentStatus
+                        })
+
+                # Tables
+                summary_table = f"""
+                    <table border='1' style='border-collapse: collapse; text-align: left; margin-bottom: 20px;'>
+                        <tr>
+                            <th>Date</th>
+                            <th>Total Employees In Office</th>
+                            <th>Total Employees On Leave</th>
+                        </tr>
+                        <tr>
+                            <td>{current_date_str}</td>
+                            <td>{len(employees_in_office)}</td>
+                            <td>{len(employees_on_leave)}</td>
+                        </tr>
+                    </table>
+                """
+
+                employees_table = """
+                    <table border='1' style='border-collapse: collapse; text-align: left;'>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Full Name</th>
+                            <th>Employment Status</th>
+                        </tr>
+                """
+                for emp in employees_in_office:
+                    employees_table += f"""
+                        <tr>
+                            <td>{emp['EmployeeId']}</td>
+                            <td>{emp['FullName']}</td>
+                            <td>{emp['EmploymentStatus']}</td>
+                        </tr>
+                    """
+                employees_table += "</table>"
+
+                leave_table = """
+                    <table border='1' style='border-collapse: collapse; text-align: left;'>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Full Name</th>
+                            <th>From Date</th>
+                            <th>To Date</th>
+                            <th>Leave Status</th>
+                            <th>Leave Type</th>
+                        </tr>
+                """
+                for leave_emp in leave_result:
+                    full_name = " ".join(filter(None, [leave_emp.FirstName, leave_emp.LastName]))
+                    leave_table += f"""
+                        <tr>
+                            <td>{leave_emp.EmployeeId}</td>
+                            <td>{full_name}</td>
+                            <td>{leave_emp.fromDate.strftime('%Y-%m-%d')}</td>
+                            <td>{leave_emp.ToDate.strftime('%Y-%m-%d')}</td>
+                            <td>{leave_emp.LeaveStatus}</td>
+                            <td>{leave_emp.LeaveName}</td>
+                        </tr>
+                    """
+                leave_table += "</table>"
+
+                # Email content
+                subject = f"Employees In Office Report - {current_date_str}"
+                body = f"""
+                    <html>
+                        <body>
+                            <h3>Employees In Office Report - {current_date_str}</h3>
+                            {summary_table}
+                            <h4>Employees Currently In Office:</h4>
+                            {employees_table}
+                            <h4>Employees On Leave:</h4>
+                            {leave_table}
+                        </body>
+                    </html>
+                """
+
+                # Send email
+                msg = MIMEMultipart()
+                msg['From'] = FROM_ADDRESS
+                msg['To'] = ", ".join(TO_ADDRESSES)
+                msg['Subject'] = subject
+                msg.attach(MIMEText(body, 'html'))
+
+                server = smtplib.SMTP('smtp.gmail.com', 587)
+                server.starttls()
+                server.login(FROM_ADDRESS, FROM_PASSWORD)
+                server.sendmail(FROM_ADDRESS, TO_ADDRESSES, msg.as_string())
+                server.quit()
+                print("Email sent successfully!")
+
+        except Exception as e:
+            print(f"Error on line {e.__traceback__.tb_lineno} inside {__file__}\nFailed to send email: {str(e)}")
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
