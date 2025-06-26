@@ -1663,8 +1663,155 @@ def get_incomplete_employees():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
+@scheduler.task('cron', id='send_employees_in_office_email', hour=8, minute=00)
 def send_employees_in_office_email():
+    print("Sending Employees In Office Email...")
+    with scheduler.app.app_context():
+        try:
+            current_date = datetime.today()
+            if current_date.weekday() == 5:
+                current_date += timedelta(days=2)
+            elif current_date.weekday() == 6:
+                current_date += timedelta(days=1)
+            # Use today's date for the report
+            current_date_str = current_date.strftime('%Y-%m-%d')
+
+            with db.session.begin():
+                all_employees_result = db.session.execute(
+                    text("""
+                        SELECT 
+                            EmployeeId,
+                            FirstName,
+                            MiddleName,
+                            LastName,
+                            EmploymentStatus
+                        FROM Employee
+                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee')
+                    """)
+                ).fetchall()
+
+                leave_result = db.session.execute(
+                    text("""
+                        SELECT DISTINCT
+                            e.EmployeeId,
+                            e.FirstName,
+                            e.LastName,
+                            lt.fromDate,
+                            lt.ToDate,
+                            lt.LeaveStatus,
+                            ltm.LeaveName
+                        FROM LeaveTransaction lt
+                        JOIN Employee e ON lt.AppliedBy = e.EmployeeId
+                        JOIN LeaveTypeMaster ltm ON lt.LeaveType = ltm.LeaveTypeID
+                        WHERE :date BETWEEN lt.fromDate AND lt.ToDate
+                        AND lt.LeaveStatus != 'Cancel'
+                    """),
+                    {"date": current_date_str}
+                ).fetchall()
+
+                employees_on_leave = {row.EmployeeId for row in leave_result}
+
+                employees_in_office = []
+                for emp in all_employees_result:
+                    if emp.EmployeeId not in employees_on_leave:
+                        full_name = " ".join(filter(None, [emp.FirstName, emp.MiddleName, emp.LastName]))
+                        employees_in_office.append({
+                            'EmployeeId': emp.EmployeeId,
+                            'FullName': full_name,
+                            'EmploymentStatus': emp.EmploymentStatus
+                        })
+
+                # Tables
+                summary_table = f"""
+                    <table border='1' style='border-collapse: collapse; text-align: left; margin-bottom: 20px;'>
+                        <tr>
+                            <th>Date</th>
+                            <th>Total Employees In Office</th>
+                            <th>Total Employees On Leave</th>
+                        </tr>
+                        <tr>
+                            <td>{current_date_str}</td>
+                            <td>{len(employees_in_office)}</td>
+                            <td>{len(employees_on_leave)}</td>
+                        </tr>
+                    </table>
+                """
+
+                employees_table = """
+                    <table border='1' style='border-collapse: collapse; text-align: left;'>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Full Name</th>
+                            <th>Employment Status</th>
+                        </tr>
+                """
+                for emp in employees_in_office:
+                    employees_table += f"""
+                        <tr>
+                            <td>{emp['EmployeeId']}</td>
+                            <td>{emp['FullName']}</td>
+                            <td>{emp['EmploymentStatus']}</td>
+                        </tr>
+                    """
+                employees_table += "</table>"
+
+                leave_table = """
+                    <table border='1' style='border-collapse: collapse; text-align: left;'>
+                        <tr>
+                            <th>Employee ID</th>
+                            <th>Full Name</th>
+                            <th>From Date</th>
+                            <th>To Date</th>
+                            <th>Leave Status</th>
+                            <th>Leave Type</th>
+                        </tr>
+                """
+                for leave_emp in leave_result:
+                    full_name = " ".join(filter(None, [leave_emp.FirstName, leave_emp.LastName]))
+                    leave_table += f"""
+                        <tr>
+                            <td>{leave_emp.EmployeeId}</td>
+                            <td>{full_name}</td>
+                            <td>{leave_emp.fromDate.strftime('%Y-%m-%d')}</td>
+                            <td>{leave_emp.ToDate.strftime('%Y-%m-%d')}</td>
+                            <td>{leave_emp.LeaveStatus}</td>
+                            <td>{leave_emp.LeaveName}</td>
+                        </tr>
+                    """
+                leave_table += "</table>"
+
+                # Email content
+                subject = f"Employees In Office Report - {current_date_str}"
+                body = f"""
+                    <html>
+                        <body>
+                            <h3>Employees In Office Report - {current_date_str}</h3>
+                            {summary_table}
+                            <h4>Employees Currently In Office:</h4>
+                            {employees_table}
+                            <h4>Employees On Leave:</h4>
+                            {leave_table}
+                        </body>
+                    </html>
+                """
+
+                # Send email
+                msg = MIMEMultipart()
+                msg['From'] = FROM_ADDRESS
+                msg['To'] = ", ".join(TO_ADDRESSES)
+                msg['Subject'] = subject
+                msg.attach(MIMEText(body, 'html'))
+
+                server = smtplib.SMTP('smtp.gmail.com', 587)
+                server.starttls()
+                server.login(FROM_ADDRESS, FROM_PASSWORD)
+                server.sendmail(FROM_ADDRESS, TO_ADDRESSES, msg.as_string())
+                server.quit()
+                print("Email sent successfully!")
+
+        except Exception as e:
+            print(f"Error on line {e.__traceback__.tb_lineno} inside {__file__}\nFailed to send email: {str(e)}")
+
     print("Sending Employees In Office Email...")
     with scheduler.app.app_context():
         try:
