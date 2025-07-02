@@ -1,4 +1,6 @@
+from dotenv.main import rewrite
 from flask import Flask, request,jsonify
+from sqlalchemy.engine import cursor
 from extensions import *  # Importing db from extension.py
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -593,8 +595,6 @@ def upload_document():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
 
 
 DOCUMENT_COLUMNS = {'tenth', 'twelve', 'pan', 'adhar', 'grad', 'resume'}
@@ -1962,6 +1962,105 @@ def send_employees_in_office_email2():
 
         except Exception as e:
             print(f"Error on line {e.__traceback__.tb_lineno} inside {__file__}\nFailed to send email: {str(e)}")
+
+
+
+from flask import request, jsonify
+from extensions import app, db
+from datetime import datetime
+from sqlalchemy import text  # ✅ required
+
+@app.route('/api/HRFunctionality/AssignEvaluatorsToEmp', methods=['POST'])
+def assign_evaluators_to_emp():
+    data = request.get_json()
+    emp_id = data.get("empId")
+    evaluator_ids = data.get("evaluatorIds")
+
+    if not emp_id or not evaluator_ids:
+        return jsonify({"error": "Missing empId or evaluatorIds"}), 400
+
+    try:
+        # ✅ Wrap SQL in text()
+        db.session.execute(
+            text("DELETE FROM EmployeeEvaluators WHERE EmpId = :emp_id"),
+            {"emp_id": emp_id}
+        )
+
+        for evaluator_id in evaluator_ids:
+            db.session.execute(
+                text("INSERT INTO EmployeeEvaluators (EmpId, EvaluatorId, AssignedOn) VALUES (:emp_id, :evaluator_id, :assigned_on)"),
+                {
+                    "emp_id": emp_id,
+                    "evaluator_id": evaluator_id,
+                    "assigned_on": datetime.now()
+                }
+            )
+
+        db.session.commit()
+        return jsonify({"message": "Evaluators assigned successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+
+@app.route('/api/HRFunctionality/GetAllEmployeeEvaluators', methods=['GET'])
+def get_all_employee_evaluators():
+    try:
+        result = db.session.execute(text("""
+            SELECT 
+                e1.EmployeeId as emp_id,
+                e1.FirstName + ' ' + e1.LastName as employee_name,
+                STRING_AGG(e2.FirstName + ' ' + e2.LastName, ', ') AS evaluator_names,
+                STRING_AGG(e2.EmployeeId, ',') AS evaluator_ids
+            FROM EmployeeEvaluators ee
+            JOIN Employee e1 ON ee.EmpId = e1.EmployeeId
+            JOIN Employee e2 ON ee.EvaluatorId = e2.EmployeeId
+            GROUP BY e1.EmployeeId, e1.FirstName, e1.LastName
+        """))
+        rows = [{
+            "empId": row.emp_id,
+            "employeeName": row.employee_name,
+            "evaluatorNames": row.evaluator_names or "",
+            "evaluatorIds": row.evaluator_ids.split(',') if row.evaluator_ids else []
+        } for row in result]
+
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+from flask import request, jsonify
+from sqlalchemy import text
+
+@app.route('/api/HRFunctionality/DeleteEvaluators', methods=['DELETE'])
+def delete_evaluators():
+    try:
+        data = request.get_json(force=True)  # 👈 force=True ensures it parses JSON in DELETE
+        emp_id = data.get('empId')
+
+        if not emp_id:
+            return jsonify({"error": "Missing empId"}), 400
+
+        # Delete from EmployeeEvaluators table (adjust table/column names if needed)
+        db.session.execute(
+            text("DELETE FROM EmployeeEvaluators WHERE EmpId = :EmpId"),
+            {'EmpId': emp_id}
+        )
+        db.session.commit()
+
+        return jsonify({"message": "Evaluator(s) deleted successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
