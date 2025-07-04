@@ -17,6 +17,10 @@ from datetime import datetime, timedelta
 from flask import send_file
 from werkzeug.utils import secure_filename
 import uuid
+import threading
+from flask_login import login_required
+from extensions import app, db
+from sqlalchemy import text  # ✅ required
 
 
 
@@ -1967,10 +1971,29 @@ def send_employees_in_office_email2():
 
 
 
-from flask import request, jsonify
-from extensions import app, db
-from datetime import datetime
-from sqlalchemy import text  # ✅ required
+# ===============================================================================
+
+
+import logging
+# Assume send_email exists in app.py
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def send_email(to_address, subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = FROM_ADDRESS
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(FROM_ADDRESS, FROM_PASSWORD)
+        server.sendmail(FROM_ADDRESS, to_address, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send email to {to_address}: {str(e)}")
+        return False
 
 @app.route('/api/HRFunctionality/AssignEvaluatorsToEmp', methods=['POST'])
 def assign_evaluators_to_emp():
@@ -1981,8 +2004,42 @@ def assign_evaluators_to_emp():
     if not emp_id or not evaluator_ids:
         return jsonify({"error": "Missing empId or evaluatorIds"}), 400
 
+    email_failures = []
     try:
-        # ✅ Wrap SQL in text()
+        # Fetch employee details
+        employee_result = db.session.execute(
+            text("""
+                SELECT FirstName, LastName, Email
+                FROM Employee
+                WHERE EmployeeId = :emp_id
+            """),
+            {"emp_id": emp_id}
+        ).fetchone()
+
+        if not employee_result:
+            return jsonify({"error": "Employee not found"}), 404
+
+        employee_name = f"{employee_result.FirstName} {employee_result.LastName}"
+        employee_email = employee_result.Email
+
+        # Fetch evaluator details, handling single or multiple IDs
+        if len(evaluator_ids) == 0:
+            return jsonify({"error": "No evaluators provided"}), 400
+
+        # Use parameterized query with proper IN clause handling
+        placeholders = ','.join([':id' + str(i) for i in range(len(evaluator_ids))])
+        query = text(f"""
+            SELECT EmployeeId, FirstName, LastName, Email
+            FROM Employee
+            WHERE EmployeeId IN ({placeholders})
+        """)
+        params = {f'id{i}': eid for i, eid in enumerate(evaluator_ids)}
+        evaluator_details = db.session.execute(query, params).fetchall()
+
+        if len(evaluator_details) != len(evaluator_ids):
+            return jsonify({"error": "One or more evaluators not found"}), 404
+
+        # Assign evaluators
         db.session.execute(
             text("DELETE FROM EmployeeEvaluators WHERE EmpId = :emp_id"),
             {"emp_id": emp_id}
@@ -1999,12 +2056,130 @@ def assign_evaluators_to_emp():
             )
 
         db.session.commit()
-        return jsonify({"message": "Evaluators assigned successfully"}), 200
+
+        # Send emails asynchronously
+        def send_evaluator_emails(failures):
+            for evaluator in evaluator_details:
+                evaluator_name = f"{evaluator.FirstName} {evaluator.LastName}"
+                email_body = f"""
+                    <html>
+                        <body>
+                            <h3>Evaluator Assignment Notification</h3>
+                            <p>Dear {evaluator_name},</p>
+                            <p>You have been assigned as an evaluator for <strong>{employee_name}</strong>.</p>
+                            <p>Please complete the evaluation by accessing the following Login link:</p>
+                            <p><a href="https://hrms.flairminds.com/">Login Page</a></p>
+                            <p>Thank you for your cooperation.</p>
+                            <p>Best regards,<br>HR Team</p>
+                        </body>
+                    </html>
+                """
+                if not send_email(evaluator.Email, f"Evaluator Assignment for {employee_name}", email_body):
+                    failures.append(evaluator_name)
+
+        # Start async email sending
+        email_thread = threading.Thread(target=send_evaluator_emails, args=(email_failures,))
+        email_thread.start()
+
+        # Wait briefly to collect any immediate failures
+        email_thread.join(timeout=2)
+
+        return jsonify({
+            "message": "Evaluators assigned successfully",
+            "emailFailures": email_failures
+        }), 200
 
     except Exception as e:
         db.session.rollback()
+        logging.error(f"Assignment failed: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
+
+@app.route('/api/HRFunctionality/SendEvaluatorReminder', methods=['POST'])
+def send_evaluator_reminder():
+    data = request.get_json()
+    emp_id = data.get("empId")
+    evaluator_ids = data.get("evaluatorIds")
+
+    if not emp_id or not evaluator_ids:
+        return jsonify({"error": "Missing empId or evaluatorIds"}), 400
+
+    email_failures = []
+    try:
+        # Fetch employee details
+        employee_result = db.session.execute(
+            text("""
+                SELECT FirstName, LastName, Email
+                FROM Employee
+                WHERE EmployeeId = :emp_id
+            """),
+            {"emp_id": emp_id}
+        ).fetchone()
+
+        if not employee_result:
+            return jsonify({"error": "Employee not found"}), 404
+
+        employee_name = f"{employee_result.FirstName} {employee_result.LastName}"
+
+        # Fetch evaluator details with assignment dates
+        placeholders = ','.join([':id' + str(i) for i in range(len(evaluator_ids))])
+        query = text(f"""
+            SELECT e.EmployeeId, e.FirstName, e.LastName, e.Email, ee.AssignedOn
+            FROM Employee e
+            JOIN EmployeeEvaluators ee ON e.EmployeeId = ee.EvaluatorId
+            WHERE e.EmployeeId IN ({placeholders}) AND ee.EmpId = :emp_id
+        """)
+        params = {f'id{i}': eid for i, eid in enumerate(evaluator_ids)}
+        params['emp_id'] = emp_id
+        evaluator_details = db.session.execute(query, params).fetchall()
+
+        if len(evaluator_details) != len(evaluator_ids):
+            return jsonify({"error": "One or more evaluators not found or not assigned to this employee"}), 404
+
+        # Send reminder emails asynchronously
+        def send_reminder_emails(failures):
+            for evaluator in evaluator_details:
+                evaluator_name = f"{evaluator.FirstName} {evaluator.LastName}"
+                assignment_date = evaluator.AssignedOn.strftime('%Y-%m-%d')
+                email_body = f"""
+                    <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                        <h2 style="color: #1890ff;">Evaluation Reminder</h2>
+                        <p>Dear {evaluator_name},</p>
+                        <div style="background: #f5f5f5; padding: 16px; border-radius: 4px;">
+                            <p>Please evaluate:</p>
+                            <h3>{employee_name} (ID: {emp_id})</h3>
+                            <p>Assigned since: {assignment_date}</p>
+                        </div>
+                        <a href="https://hrms.flairminds.com/evaluation/{emp_id}"
+                           style="display: inline-block; background: #1890ff; color: white; 
+                                  padding: 10px 20px; margin: 15px 0; border-radius: 4px; 
+                                  text-decoration: none;">
+                            Go to Evaluation
+                        </a>
+                        <p style="color: #999; font-size: 12px;">
+                            This is an automated reminder. Contact HR if you believe this was sent in error.
+                        </p>
+                    </div>
+                """
+                if not send_email(evaluator.Email, f"Evaluation Reminder for {employee_name}", email_body):
+                    failures.append(evaluator_name)
+
+        # Start async email sending
+        email_thread = threading.Thread(target=send_reminder_emails, args=(email_failures,))
+        email_thread.start()
+
+        # Wait briefly to collect any immediate failures
+        email_thread.join(timeout=2)
+
+        return jsonify({
+            "message": "Reminder emails sent successfully",
+            "emailFailures": email_failures
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Reminder email failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 
