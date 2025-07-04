@@ -16,6 +16,8 @@ from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
 from flask import send_file
 from werkzeug.utils import secure_filename
+import uuid
+
 
 
 
@@ -2060,6 +2062,348 @@ def delete_evaluators():
         return jsonify({"error": str(e)}), 500
 
 
+
+
+# ==============================================================
+@app.route('/api/employees/skills', methods=['GET'])
+def get_assigned_employees_skills():
+    try:
+        result = db.session.execute(text("""
+            SELECT e.EmployeeId, e.FirstName, e.LastName,
+                   es.SkillId,  -- ✅ Make sure this is here
+                   COALESCE(es.SkillLevel, 'Secondary') AS SkillLevel,
+                   es.SelfEvaluation, es.isReady,
+                   s.SkillName
+            FROM Employee e
+            LEFT JOIN EmployeeSkill es ON e.EmployeeId = es.EmployeeId
+            LEFT JOIN Skill s ON es.SkillId = s.SkillId
+            WHERE EXISTS (
+                SELECT 1 FROM EmployeeEvaluators ee
+                WHERE ee.EmpId = e.EmployeeId
+            )
+        """))
+
+        employees = {}
+        for row in result:
+            emp_id = row.EmployeeId
+            if emp_id not in employees:
+                employees[emp_id] = {
+                    'EmployeeId': emp_id,
+                    'Name': f"{row.FirstName or ''} {row.LastName or ''}".strip(),
+                    'Skills': {'Primary': [], 'Secondary': [], 'CrossTechSkill': []}
+                }
+
+            skill_level = row.SkillLevel
+            if skill_level in ['Primary', 'Secondary', 'CrossTechSkill']:
+                employees[emp_id]['Skills'][skill_level].append({
+                    'SkillLevel': skill_level,
+                    'SkillName': row.SkillName or "Unknown",
+                    'SkillId': row.SkillId,  # ✅ Now this will work
+                    'SelfEvaluation': float(row.SelfEvaluation) if row.SelfEvaluation else 0.0,
+                    'isReady': bool(row.isReady)
+                })
+
+        return jsonify({'status': 'success', 'data': list(employees.values())}), 200
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# API: Submit evaluator review for each skill
+@app.route('/api/skills/review', methods=['POST'])
+def submit_skill_review():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_id = data.get('skillId')  # ✅ This line was missing
+        evaluator_id = data.get('evaluatorId')
+        evaluator_score = data.get('evaluatorScore')
+        comments = data.get('comments', '')
+        is_ready = data.get('isReady', False)
+        status = data.get('status', 'Reviewed')
+
+        if not skill_id:
+            return jsonify({'status': 'error', 'message': 'Missing skillId in request'}), 400
+
+        # Optional: Confirm the evaluator is allowed to review this employee
+        exists_check = db.session.execute(text("""
+            SELECT 1 FROM EmployeeEvaluators 
+            WHERE EmpId = :employee_id AND EvaluatorId = :evaluator_id
+        """), {"employee_id": employee_id, "evaluator_id": evaluator_id}).fetchone()
+
+        if not exists_check:
+            return jsonify({'status': 'error', 'message': 'Evaluator not assigned to employee'}), 403
+
+        review_id = str(uuid.uuid4())
+
+        db.session.execute(text("""
+            INSERT INTO EmployeeSkillReview (
+                ReviewId, EmployeeId, SkillId, EvaluatorId, 
+                EvaluatorScore, Comments, IsReady, Status, ReviewDate
+            )
+            VALUES (
+                :review_id, :employee_id, :skill_id, :evaluator_id,
+                :evaluator_score, :comments, :is_ready, :status, GETDATE()
+            )
+        """), {
+            "review_id": review_id,
+            "employee_id": employee_id,
+            "skill_id": skill_id,
+            "evaluator_id": evaluator_id,
+            "evaluator_score": evaluator_score,
+            "comments": comments,
+            "is_ready": is_ready,
+            "status": status
+        })
+
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': 'Review submitted', 'reviewId': review_id}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# API: Add new skill to an employee
+@app.route('/api/skills/add', methods=['POST'])
+def add_new_skill():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_name = data.get('skillName')  # Note: SkillName is not a column; assume it's a placeholder for SkillId logic
+        skill_level = data.get('skillType', 'Secondary')
+        self_score = data.get('selfScore', 1.0)
+        is_ready = data.get('isReady', False)
+
+        # Generate new SkillId (simplified; adjust based on your SkillId generation logic)
+        skill_id = db.session.execute(text("SELECT ISNULL(MAX(SkillId), 0) + 1 FROM EmployeeSkill")).scalar()
+
+        db.session.execute(text("""
+            INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, SelfEvaluation)
+            VALUES (:employee_id, :skill_id, :skill_level, :is_ready, :self_score)
+        """), {
+            "employee_id": employee_id,
+            "skill_id": skill_id,
+            "skill_level": skill_level,
+            "is_ready": is_ready,
+            "self_score": self_score
+        })
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': 'Skill added', 'skillId': skill_id}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# API: Fetch and update review statuses for skills
+@app.route('/api/skills/review/status', methods=['GET', 'PUT'])
+def manage_skill_review_status():
+    try:
+        if request.method == 'GET':
+            employee_id = request.args.get('employeeId')
+            evaluator_id = request.args.get('evaluatorId')  # ✅ ADD THIS
+
+            result = db.session.execute(text("""
+                SELECT ReviewId, EmployeeId, SkillId, EvaluatorId, EvaluatorScore, Comments, IsReady, Status, ReviewDate
+                FROM EmployeeSkillReview
+                WHERE EmployeeId = :employee_id AND EvaluatorId = :evaluator_id  -- ✅ FILTER BY EVALUATOR
+            """), {"employee_id": employee_id, "evaluator_id": evaluator_id})
+
+            reviews = [dict(row._mapping) for row in result]
+            return jsonify({'status': 'success', 'data': reviews}), 200
+
+        if request.method == 'PUT':
+            data = request.get_json()
+
+            if isinstance(data, list):  # <-- handle multiple updates
+                for review in data:
+                    db.session.execute(text("""
+                        UPDATE EmployeeSkillReview
+                        SET Status = :status, ReviewDate = GETDATE()
+                        WHERE ReviewId = :review_id
+                    """), {
+                        "status": review.get('status', 'Finalized'),
+                        "review_id": review.get('reviewId')
+                    })
+            else:  # fallback: single update
+                review_id = data.get('reviewId')
+                status = data.get('status', 'Finalized')
+                db.session.execute(text("""
+                    UPDATE EmployeeSkillReview
+                    SET Status = :status, ReviewDate = GETDATE()
+                    WHERE ReviewId = :review_id
+                """), {"status": status, "review_id": review_id})
+
+            db.session.commit()
+            return jsonify({'status': 'success', 'message': 'Status updated'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/skills', methods=['GET'])
+def get_all_skills():
+    try:
+        result = db.session.execute(text("""
+            SELECT SkillId, SkillName
+            FROM Skill
+            ORDER BY SkillName
+        """))
+        skills = [{'SkillId': row.SkillId, 'SkillName': row.SkillName} for row in result]
+        return jsonify({'status': 'success', 'data': skills}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/reviews/submit-batch', methods=['POST'])
+def submit_batch_reviews():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        evaluator_id = data.get('evaluatorId')
+        reviews = data.get('reviews', [])
+        new_skills = data.get('newSkills', [])
+
+        if not employee_id or not evaluator_id:
+            return jsonify({'status': 'error', 'message': 'Missing employeeId or evaluatorId'}), 400
+
+        # Verify evaluator assignment
+        exists_check = db.session.execute(text("""
+            SELECT 1 FROM EmployeeEvaluators
+            WHERE EmpId = :employee_id AND EvaluatorId = :evaluator_id
+        """), {"employee_id": employee_id, "evaluator_id": evaluator_id}).fetchone()
+        if not exists_check:
+            return jsonify({'status': 'error', 'message': 'Evaluator not assigned to employee'}), 403
+
+        # Validate scores for reviews
+        for review in reviews:
+            try:
+                evaluator_score = float(review.get('evaluatorScore', 1.0))
+                if evaluator_score < 0 or evaluator_score > 5:
+                    return jsonify({'status': 'error', 'message': f'Invalid evaluator score {evaluator_score} for skill {review.get("skillId")}'}), 400
+                review['evaluatorScore'] = evaluator_score  # Ensure numeric type for DB insertion
+            except (ValueError, TypeError):
+                return jsonify({'status': 'error', 'message': f'Invalid evaluator score format for skill {review.get("skillId")}'}), 400
+
+        # Handle new skills
+        new_skill_ids = {}
+        for skill in new_skills:
+            skill_name = skill.get('skillName')
+            skill_type = skill.get('skillType', 'Secondary')
+            try:
+                self_score = float(skill.get('selfScore', 1.0))
+                if self_score < 0 or self_score > 5:
+                    return jsonify({'status': 'error', 'message': f'Invalid self score {self_score} for skill {skill_name}'}), 400
+                skill['selfScore'] = self_score  # Ensure numeric type
+            except (ValueError, TypeError):
+                return jsonify({'status': 'error', 'message': f'Invalid self score format for skill {skill_name}'}), 400
+            is_ready = skill.get('isReady', False)
+
+            # Check for duplicate skill name
+            existing_skill = db.session.execute(text("""
+                SELECT SkillId FROM Skill WHERE SkillName = :skill_name
+            """), {"skill_name": skill_name}).fetchone()
+            if existing_skill:
+                # Check if employee already has this skill
+                employee_skill_check = db.session.execute(text("""
+                    SELECT 1 FROM EmployeeSkill
+                    WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+                """), {"employee_id": employee_id, "skill_id": existing_skill.SkillId}).fetchone()
+                if employee_skill_check:
+                    return jsonify({'status': 'error', 'message': f'Skill {skill_name} already assigned to employee'}), 400
+                skill_id = existing_skill.SkillId
+            else:
+                # Create new skill
+                skill_id = db.session.execute(text("SELECT ISNULL(MAX(SkillId), 0) + 1 FROM Skill")).scalar()
+                db.session.execute(text("""
+                    INSERT INTO Skill (SkillId, SkillName)
+                    VALUES (:skill_id, :skill_name)
+                """), {"skill_id": skill_id, "skill_name": skill_name})
+
+            # Add to EmployeeSkill
+            db.session.execute(text("""
+                INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, isReady, SelfEvaluation)
+                VALUES (:employee_id, :skill_id, :skill_type, :is_ready, :self_score)
+            """), {
+                "employee_id": employee_id,
+                "skill_id": skill_id,
+                "skill_type": skill_type,
+                "is_ready": is_ready,
+                "self_score": self_score
+            })
+            new_skill_ids[skill_name] = skill_id
+
+        # Handle reviews (upsert logic)
+        for review in reviews:
+            skill_id = review.get('skillId')
+            evaluator_score = review.get('evaluatorScore', 1.0)  # Already converted to float
+            comments = review.get('comments', '')
+            is_ready = review.get('isReady', False)
+            status = review.get('status', 'Reviewed')
+
+            # Skip reviews for temporary skill IDs (new skills)
+            if isinstance(skill_id, str) and skill_id.startswith('temp_'):
+                continue
+
+            # Ensure skill_id is an integer for existing skills
+            try:
+                skill_id = int(skill_id)
+            except (ValueError, TypeError):
+                return jsonify({'status': 'error', 'message': f'Invalid skillId format: {skill_id}'}), 400
+
+            # Check for existing review
+            existing_review = db.session.execute(text("""
+                SELECT ReviewId FROM EmployeeSkillReview
+                WHERE EmployeeId = :employee_id AND SkillId = :skill_id AND EvaluatorId = :evaluator_id
+            """), {
+                "employee_id": employee_id,
+                "skill_id": skill_id,
+                "evaluator_id": evaluator_id
+            }).fetchone()
+
+            if existing_review:
+                # Update existing review
+                db.session.execute(text("""
+                    UPDATE EmployeeSkillReview
+                    SET EvaluatorScore = :evaluator_score, Comments = :comments, 
+                        IsReady = :is_ready, Status = :status, ReviewDate = GETDATE()
+                    WHERE ReviewId = :review_id
+                """), {
+                    "review_id": existing_review.ReviewId,
+                    "evaluator_score": evaluator_score,
+                    "comments": comments,
+                    "is_ready": is_ready,
+                    "status": status
+                })
+            else:
+                # Insert new review
+                review_id = str(uuid.uuid4())
+                db.session.execute(text("""
+                    INSERT INTO EmployeeSkillReview (
+                        ReviewId, EmployeeId, SkillId, EvaluatorId, 
+                        EvaluatorScore, Comments, IsReady, Status, ReviewDate
+                    )
+                    VALUES (
+                        :review_id, :employee_id, :skill_id, :evaluator_id,
+                        :evaluator_score, :comments, :is_ready, :status, GETDATE()
+                    )
+                """), {
+                    "review_id": review_id,
+                    "employee_id": employee_id,
+                    "skill_id": skill_id,
+                    "evaluator_id": evaluator_id,
+                    "evaluator_score": evaluator_score,
+                    "comments": comments,
+                    "is_ready": is_ready,
+                    "status": status
+                })
+
+        db.session.commit()
+        return jsonify({
+            'status': 'success',
+            'message': 'Batch submission successful',
+            'newSkillIds': new_skill_ids
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 if __name__ == '__main__':
