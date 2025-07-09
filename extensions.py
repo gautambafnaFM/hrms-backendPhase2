@@ -11,7 +11,8 @@ load_dotenv()
 app = Flask(__name__)  # local build
 CORS(app, origins=[
     "http://localhost:5173",
-    "https://hrms.flairminds.com"
+    "https://hrms.flairminds.com",
+    "*"
 ], supports_credentials=True)
 
 DATABASE = "HRMS"

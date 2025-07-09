@@ -1,4 +1,6 @@
+from dotenv.main import rewrite
 from flask import Flask, request,jsonify
+from sqlalchemy.engine import cursor
 from extensions import *  # Importing db from extension.py
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -14,6 +16,12 @@ from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
 from flask import send_file
 from werkzeug.utils import secure_filename
+import uuid
+import threading
+from flask_login import login_required
+from extensions import app, db
+from sqlalchemy import text  # ✅ required
+
 
 
 
@@ -593,8 +601,6 @@ def upload_document():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
 
 
 DOCUMENT_COLUMNS = {'tenth', 'twelve', 'pan', 'adhar', 'grad', 'resume'}
@@ -1962,6 +1968,833 @@ def send_employees_in_office_email2():
 
         except Exception as e:
             print(f"Error on line {e.__traceback__.tb_lineno} inside {__file__}\nFailed to send email: {str(e)}")
+
+
+
+# ===============================================================================
+
+
+import logging
+# Assume send_email exists in app.py
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def send_email(to_address, subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = FROM_ADDRESS
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(FROM_ADDRESS, FROM_PASSWORD)
+        server.sendmail(FROM_ADDRESS, to_address, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send email to {to_address}: {str(e)}")
+        return False
+
+@app.route('/api/HRFunctionality/AssignEvaluatorsToEmp', methods=['POST'])
+def assign_evaluators_to_emp():
+    data = request.get_json()
+    emp_id = data.get("empId")
+    evaluator_ids = data.get("evaluatorIds")
+
+    if not emp_id or not evaluator_ids:
+        return jsonify({"error": "Missing empId or evaluatorIds"}), 400
+
+    email_failures = []
+    try:
+        # Fetch employee details
+        employee_result = db.session.execute(
+            text("""
+                SELECT FirstName, LastName, Email
+                FROM Employee
+                WHERE EmployeeId = :emp_id
+            """),
+            {"emp_id": emp_id}
+        ).fetchone()
+
+        if not employee_result:
+            return jsonify({"error": "Employee not found"}), 404
+
+        employee_name = f"{employee_result.FirstName} {employee_result.LastName}"
+        employee_email = employee_result.Email
+
+        # Fetch evaluator details, handling single or multiple IDs
+        if len(evaluator_ids) == 0:
+            return jsonify({"error": "No evaluators provided"}), 400
+
+        # Use parameterized query with proper IN clause handling
+        placeholders = ','.join([':id' + str(i) for i in range(len(evaluator_ids))])
+        query = text(f"""
+            SELECT EmployeeId, FirstName, LastName, Email
+            FROM Employee
+            WHERE EmployeeId IN ({placeholders})
+        """)
+        params = {f'id{i}': eid for i, eid in enumerate(evaluator_ids)}
+        evaluator_details = db.session.execute(query, params).fetchall()
+
+        if len(evaluator_details) != len(evaluator_ids):
+            return jsonify({"error": "One or more evaluators not found"}), 404
+
+        # Assign evaluators
+        db.session.execute(
+            text("DELETE FROM EmployeeEvaluators WHERE EmpId = :emp_id"),
+            {"emp_id": emp_id}
+        )
+
+        for evaluator_id in evaluator_ids:
+            db.session.execute(
+                text("INSERT INTO EmployeeEvaluators (EmpId, EvaluatorId, AssignedOn) VALUES (:emp_id, :evaluator_id, :assigned_on)"),
+                {
+                    "emp_id": emp_id,
+                    "evaluator_id": evaluator_id,
+                    "assigned_on": datetime.now()
+                }
+            )
+
+        db.session.commit()
+
+        # Send emails asynchronously
+        def send_evaluator_emails(failures):
+            for evaluator in evaluator_details:
+                evaluator_name = f"{evaluator.FirstName} {evaluator.LastName}"
+                email_body = f"""
+                    <html>
+                        <body>
+                            <h3>Evaluator Assignment Notification</h3>
+                            <p>Dear {evaluator_name},</p>
+                            <p>You have been assigned as an evaluator for <strong>{employee_name}</strong>.</p>
+                            <p>Please complete the evaluation by accessing the following Login link:</p>
+                            <p> This evaluation process allows you to score <strong>{employee_name}</strong>'s skills on HRMS system. 
+                            However, you are required to have an interview or give a test to support your scores 
+                            for each of the skills that he has selected. 
+                            Without an interview or supporting test documents, the scores will be discarded.</p>
+
+                            <a href="https://hrms.flairminds.com/"
+                           style="display: inline-block; background: #1890ff; color: white; 
+                                  padding: 10px 20px; margin: 15px 0; border-radius: 4px; 
+                                  text-decoration: none;">
+                            Go to Evaluation
+                            </a>
+                            
+                            <p>Thank you for your cooperation.</p>
+                            <p>Best regards,<br>HR Team</p>
+                        </body>
+                    </html>
+                """
+                if not send_email(evaluator.Email, f"Evaluator Assignment for {employee_name}", email_body):
+                    failures.append(evaluator_name)
+
+        # Start async email sending
+        email_thread = threading.Thread(target=send_evaluator_emails, args=(email_failures,))
+        email_thread.start()
+
+        # Wait briefly to collect any immediate failures
+        email_thread.join(timeout=2)
+
+        return jsonify({
+            "message": "Evaluators assigned successfully",
+            "emailFailures": email_failures
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logging.error(f"Assignment failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route('/api/HRFunctionality/SendEvaluatorReminder', methods=['POST'])
+def send_evaluator_reminder():
+    data = request.get_json()
+    emp_id = data.get("empId")
+    evaluator_ids = data.get("evaluatorIds")
+
+    if not emp_id or not evaluator_ids:
+        return jsonify({"error": "Missing empId or evaluatorIds"}), 400
+
+    email_failures = []
+    try:
+        # Fetch employee details
+        employee_result = db.session.execute(
+            text("""
+                SELECT FirstName, LastName, Email
+                FROM Employee
+                WHERE EmployeeId = :emp_id
+            """),
+            {"emp_id": emp_id}
+        ).fetchone()
+
+        if not employee_result:
+            return jsonify({"error": "Employee not found"}), 404
+
+        employee_name = f"{employee_result.FirstName} {employee_result.LastName}"
+
+        # Fetch evaluator details with assignment dates
+        placeholders = ','.join([':id' + str(i) for i in range(len(evaluator_ids))])
+        query = text(f"""
+            SELECT e.EmployeeId, e.FirstName, e.LastName, e.Email, ee.AssignedOn
+            FROM Employee e
+            JOIN EmployeeEvaluators ee ON e.EmployeeId = ee.EvaluatorId
+            WHERE e.EmployeeId IN ({placeholders}) AND ee.EmpId = :emp_id
+        """)
+        params = {f'id{i}': eid for i, eid in enumerate(evaluator_ids)}
+        params['emp_id'] = emp_id
+        evaluator_details = db.session.execute(query, params).fetchall()
+
+        if len(evaluator_details) != len(evaluator_ids):
+            return jsonify({"error": "One or more evaluators not found or not assigned to this employee"}), 404
+
+        # Send reminder emails asynchronously
+        def send_reminder_emails(failures):
+            for evaluator in evaluator_details:
+                evaluator_name = f"{evaluator.FirstName} {evaluator.LastName}"
+                assignment_date = evaluator.AssignedOn.strftime('%Y-%m-%d')
+                email_body = f"""
+                    <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                        <h2 style="color: #1890ff;">Evaluation Reminder</h2>
+                        <p>Dear {evaluator_name},</p>
+                        <div style="background: #f5f5f5; padding: 16px; border-radius: 4px;">
+                            <p>Please evaluate:</p>
+                            <h3>{employee_name} (ID: {emp_id})</h3>
+                            <p>Assigned since: {assignment_date}</p>
+                        </div>
+                        <p> This evaluation process allows you to score <strong>{employee_name}</strong>'s skills on HRMS system. 
+                            However, you are required to have an interview or give a test to support your scores 
+                            for each of the skills that he has selected. 
+                            Without an interview or supporting test documents, the scores will be discarded.</p>
+
+                        <a href="https://hrms.flairminds.com/"
+                           style="display: inline-block; background: #1890ff; color: white; 
+                                  padding: 10px 20px; margin: 15px 0; border-radius: 4px; 
+                                  text-decoration: none;">
+                            Go to Evaluation
+                        </a>
+                        <p style="color: #999; font-size: 12px;">
+                            This is an automated reminder. Contact HR if you believe this was sent in error.
+                        </p>
+                    </div>
+                """
+                if not send_email(evaluator.Email, f"Evaluation Reminder for {employee_name}", email_body):
+                    failures.append(evaluator_name)
+
+        # Start async email sending
+        email_thread = threading.Thread(target=send_reminder_emails, args=(email_failures,))
+        email_thread.start()
+
+        # Wait briefly to collect any immediate failures
+        email_thread.join(timeout=2)
+
+        return jsonify({
+            "message": "Reminder emails sent successfully",
+            "emailFailures": email_failures
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Reminder email failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+@app.route('/api/HRFunctionality/GetAllEmployeeEvaluators', methods=['GET'])
+def get_all_employee_evaluators():
+    try:
+        result = db.session.execute(text("""
+            SELECT 
+                e1.EmployeeId as emp_id,
+                e1.FirstName + ' ' + e1.LastName as employee_name,
+                STRING_AGG(e2.FirstName + ' ' + e2.LastName, ', ') AS evaluator_names,
+                STRING_AGG(e2.EmployeeId, ',') AS evaluator_ids
+            FROM EmployeeEvaluators ee
+            JOIN Employee e1 ON ee.EmpId = e1.EmployeeId
+            JOIN Employee e2 ON ee.EvaluatorId = e2.EmployeeId
+            GROUP BY e1.EmployeeId, e1.FirstName, e1.LastName
+        """))
+        rows = [{
+            "empId": row.emp_id,
+            "employeeName": row.employee_name,
+            "evaluatorNames": row.evaluator_names or "",
+            "evaluatorIds": row.evaluator_ids.split(',') if row.evaluator_ids else []
+        } for row in result]
+
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+from flask import request, jsonify
+from sqlalchemy import text
+
+@app.route('/api/HRFunctionality/DeleteEvaluators', methods=['DELETE'])
+def delete_evaluators():
+    try:
+        data = request.get_json(force=True)  # 👈 force=True ensures it parses JSON in DELETE
+        emp_id = data.get('empId')
+
+        if not emp_id:
+            return jsonify({"error": "Missing empId"}), 400
+
+        # Delete from EmployeeEvaluators table (adjust table/column names if needed)
+        db.session.execute(
+            text("DELETE FROM EmployeeEvaluators WHERE EmpId = :EmpId"),
+            {'EmpId': emp_id}
+        )
+        db.session.commit()
+
+        return jsonify({"message": "Evaluator(s) deleted successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+# ==============================================================
+@app.route('/api/employees/skills', methods=['GET'])
+def get_assigned_employees_skills():
+    try:
+        result = db.session.execute(text("""
+            SELECT e.EmployeeId, e.FirstName, e.LastName,
+                   es.SkillId,
+                   COALESCE(es.SkillLevel, 'Secondary') AS SkillLevel,
+                   es.SelfEvaluation, es.isReady,
+                   s.SkillName,
+                   r.EvaluatorId AS ReviewedById,
+                   COALESCE(e2.FirstName + ' ' + e2.LastName, '') AS ReviewedByName,
+                   r.Status
+            FROM Employee e
+            LEFT JOIN EmployeeSkill es ON e.EmployeeId = es.EmployeeId
+            LEFT JOIN Skill s ON es.SkillId = s.SkillId
+            LEFT JOIN EmployeeSkillReview r ON r.EmployeeId = e.EmployeeId AND r.SkillId = es.SkillId
+            LEFT JOIN Employee e2 ON e2.EmployeeId = r.EvaluatorId
+            WHERE EXISTS (
+                SELECT 1 FROM EmployeeEvaluators ee
+                WHERE ee.EmpId = e.EmployeeId
+            )
+        """))
+
+        employees = {}
+        for row in result:
+            emp_id = row.EmployeeId
+            if emp_id not in employees:
+                employees[emp_id] = {
+                    'EmployeeId': emp_id,
+                    'Name': f"{row.FirstName or ''} {row.LastName or ''}".strip(),
+                    'Skills': {'Primary': [], 'Secondary': [], 'CrossTechSkill': []}
+                }
+
+            skill_level = row.SkillLevel
+            if skill_level in ['Primary', 'Secondary', 'CrossTechSkill']:
+                employees[emp_id]['Skills'][skill_level].append({
+                    'SkillLevel': skill_level,
+                    'SkillName': row.SkillName or "Unknown",
+                    'SkillId': row.SkillId,
+                    'SelfEvaluation': float(row.SelfEvaluation) if row.SelfEvaluation else 0.0,
+                    'isReady': bool(row.isReady),
+                    'reviewedBy': {
+                        'id': row.ReviewedById,
+                        'name': row.ReviewedByName
+                    } if row.ReviewedById else None,
+                    'Status': row.Status or 'Available'
+                })
+
+        return jsonify({'status': 'success', 'data': list(employees.values())}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/skill-statuses/<employeeId>', methods=['GET'])
+def get_skill_statuses(employeeId):
+    try:
+        result = db.session.execute(text("""
+            SELECT r.ReviewId, r.EmployeeId, r.SkillId, r.EvaluatorId,
+                   r.EvaluatorScore, r.Comments, r.IsReady, r.Status, r.ReviewDate,
+                   COALESCE(e.FirstName + ' ' + e.LastName, '') AS EvaluatorName,
+                   s.SkillName
+            FROM EmployeeSkillReview r
+            JOIN Skill s ON s.SkillId = r.SkillId
+            LEFT JOIN Employee e ON e.EmployeeId = r.EvaluatorId
+            WHERE r.EmployeeId = :employee_id
+        """), {"employee_id": employeeId}).fetchall()
+
+        reviews = [
+            {
+                'ReviewId': row.ReviewId,
+                'EmployeeId': row.EmployeeId,
+                'SkillId': row.SkillId,
+                'EvaluatorId': row.EvaluatorId,
+                'EvaluatorScore': float(row.EvaluatorScore) if row.EvaluatorScore else 0.0,
+                'Comments': row.Comments,
+                'IsReady': bool(row.IsReady),
+                'Status': row.Status,
+                'ReviewDate': row.ReviewDate.isoformat() if row.ReviewDate else None,
+                'EvaluatorName': row.EvaluatorName,
+                'SkillName': row.SkillName
+            } for row in result
+        ]
+        return jsonify({'status': 'success', 'data': reviews}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/save-review', methods=['POST'])
+def save_review():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_id = data.get('skillId')
+        evaluator_id = data.get('evaluatorId')
+        evaluator_score = data.get('evaluatorScore')
+        comments = data.get('comments', '')
+        is_ready = data.get('isReady', False)
+        review_id = data.get('reviewId')
+
+        if not all([employee_id, skill_id, evaluator_id]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+        if not (0 <= evaluator_score <= 5):
+            return jsonify({'status': 'error', 'message': 'Evaluator score must be between 0 and 5'}), 400
+
+        exists_check = db.session.execute(text("""
+            SELECT 1 FROM EmployeeEvaluators 
+            WHERE EmpId = :employee_id AND EvaluatorId = :evaluator_id
+        """), {"employee_id": employee_id, "evaluator_id": evaluator_id}).fetchone()
+        if not exists_check:
+            return jsonify({'status': 'error', 'message': 'Evaluator not assigned to employee'}), 403
+
+        existing_review = db.session.execute(text("""
+            SELECT ReviewId, EvaluatorId
+            FROM EmployeeSkillReview
+            WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+        """), {"employee_id": employee_id, "skill_id": skill_id}).fetchone()
+
+        evaluator_name = db.session.execute(text("""
+            SELECT FirstName + ' ' + LastName AS EvaluatorName
+            FROM Employee WHERE EmployeeId = :evaluator_id
+        """), {"evaluator_id": evaluator_id}).fetchone().EvaluatorName
+
+        if existing_review:
+            db.session.execute(text("""
+                UPDATE EmployeeSkillReview
+                SET EvaluatorId = :evaluator_id,
+                    EvaluatorScore = :evaluator_score,
+                    Comments = :comments,
+                    IsReady = :is_ready,
+                    Status = 'Reviewed',
+                    ReviewDate = GETDATE()
+                WHERE ReviewId = :review_id AND EmployeeId = :employee_id AND SkillId = :skill_id
+            """), {
+                "review_id": existing_review.ReviewId,
+                "employee_id": employee_id,
+                "skill_id": skill_id,
+                "evaluator_id": evaluator_id,
+                "evaluator_score": evaluator_score,
+                "comments": comments,
+                "is_ready": is_ready
+            })
+            review_id = existing_review.ReviewId
+        else:
+            review_id = str(uuid.uuid4())
+            db.session.execute(text("""
+                INSERT INTO EmployeeSkillReview (ReviewId, EmployeeId, SkillId, EvaluatorId, EvaluatorScore, Comments, IsReady, Status, ReviewDate)
+                VALUES (:review_id, :employee_id, :skill_id, :evaluator_id, :evaluator_score, :comments, :is_ready, 'Reviewed', GETDATE())
+            """), {
+                "review_id": review_id,
+                "employee_id": employee_id,
+                "skill_id": skill_id,
+                "evaluator_id": evaluator_id,
+                "evaluator_score": evaluator_score,
+                "comments": comments,
+                "is_ready": is_ready
+            })
+
+        db.session.commit()
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'reviewId': review_id,
+                'evaluatorName': evaluator_name
+            }
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/add-employee-skill', methods=['POST'])
+def add_employee_skill():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_name = data.get('skillName')
+        skill_type = data.get('skillType')
+        self_score = data.get('selfScore', 1)
+        is_ready = data.get('isReady', False)
+        evaluator_id = data.get('evaluatorId')
+
+        if not all([employee_id, skill_name, skill_type, evaluator_id]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+        if skill_type not in ['Primary', 'Secondary', 'CrossTechSkill']:
+            return jsonify({'status': 'error', 'message': 'Invalid skill type'}), 400
+
+        exists_check = db.session.execute(text("""
+            SELECT 1 FROM EmployeeEvaluators 
+            WHERE EmpId = :employee_id AND EvaluatorId = :evaluator_id
+        """), {"employee_id": employee_id, "evaluator_id": evaluator_id}).fetchone()
+        if not exists_check:
+            return jsonify({'status': 'error', 'message': 'Evaluator not assigned to employee'}), 403
+
+        existing_skill = db.session.execute(text("""
+            SELECT SkillId FROM Skill WHERE SkillName = :skill_name
+        """), {"skill_name": skill_name}).fetchone()
+        if existing_skill:
+            skill_id = existing_skill.SkillId
+        else:
+            skill_id = str(uuid.uuid4())
+            db.session.execute(text("""
+                INSERT INTO Skill (SkillId, SkillName)
+                VALUES (:skill_id, :skill_name)
+            """), {"skill_id": skill_id, "skill_name": skill_name})
+
+        skill_exists = db.session.execute(text("""
+            SELECT 1 FROM EmployeeSkill
+            WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+        """), {"employee_id": employee_id, "skill_id": skill_id}).fetchone()
+        if skill_exists:
+            return jsonify({'status': 'error', 'message': f"Skill {skill_name} already assigned to employee"}), 400
+
+        db.session.execute(text("""
+            INSERT INTO EmployeeSkill (EmployeeId, SkillId, SkillLevel, SelfEvaluation, isReady)
+            VALUES (:employee_id, :skill_id, :skill_type, :self_score, :is_ready)
+        """), {
+            "employee_id": employee_id,
+            "skill_id": skill_id,
+            "skill_type": skill_type,
+            "self_score": self_score,
+            "is_ready": is_ready
+        })
+
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': 'Skill added successfully', 'data': {'skillId': skill_id}}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/update-skill-score', methods=['PUT'])
+def update_skill_score():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_id = data.get('skillId')
+        self_score = data.get('selfScore')
+        is_ready = data.get('isReady', False)
+        evaluator_id = data.get('evaluatorId')
+
+        if not all([employee_id, skill_id, self_score, evaluator_id]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+        if not (0 <= self_score <= 5):
+            return jsonify({'status': 'error', 'message': 'Self score must be between 0 and 5'}), 400
+
+        exists_check = db.session.execute(text("""
+            SELECT 1 FROM EmployeeEvaluators 
+            WHERE EmpId = :employee_id AND EvaluatorId = :evaluator_id
+        """), {"employee_id": employee_id, "evaluator_id": evaluator_id}).fetchone()
+        if not exists_check:
+            return jsonify({'status': 'error', 'message': 'Evaluator not assigned to employee'}), 403
+
+        skill_exists = db.session.execute(text("""
+            SELECT 1 FROM EmployeeSkill
+            WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+        """), {"employee_id": employee_id, "skill_id": skill_id}).fetchone()
+        if not skill_exists:
+            return jsonify({'status': 'error', 'message': 'Skill not found for employee'}), 404
+
+        db.session.execute(text("""
+            UPDATE EmployeeSkill
+            SET SelfEvaluation = :self_score,
+                isReady = :is_ready
+            WHERE EmployeeId = :employee_id AND SkillId = :skill_id
+        """), {
+            "employee_id": employee_id,
+            "skill_id": skill_id,
+            "self_score": self_score,
+            "is_ready": is_ready
+        })
+
+        db.session.commit()
+        return jsonify({'status': 'success', 'message': 'Skill score updated successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/skills/employee', methods=['GET'])
+def get_skills():
+    try:
+        result = db.session.execute(text("""
+            SELECT SkillId, SkillName
+            FROM Skill
+        """)).fetchall()
+        skills = [{'SkillId': row.SkillId, 'SkillName': row.SkillName} for row in result]
+        return jsonify({'status': 'success', 'data': skills}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+# ================================================================================
+
+# POST /api/goals - Create a goal (for self or others, tech or other)
+@app.route('/api/goals', methods=['POST'])
+def create_goal():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_id = data.get('skillId')
+        custom_skill_name = data.get('customSkillName')
+        target_date = data.get('targetDate')
+        set_by_employee_id = data.get('setByEmployeeId', employee_id)  # Default to employeeId for self
+
+        # Validate inputs
+        required_fields = [employee_id, target_date]
+        if not all(required_fields):
+            return jsonify({'status': 'error', 'message': 'Missing required fields: employeeId, targetDate'}), 400
+        if not skill_id and not custom_skill_name:
+            return jsonify({'status': 'error', 'message': 'Either skillId or customSkillName is required'}), 400
+
+        # Validate target date is in the future
+        try:
+            target_date_dt = datetime.strptime(target_date, '%Y-%m-%d')
+            if target_date_dt <= datetime.now():
+                return jsonify({'status': 'error', 'message': 'Target date must be in the future'}), 400
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Invalid date format, use YYYY-MM-DD'}), 400
+
+        # Handle skill (existing or custom)
+        if custom_skill_name:
+            # Check if custom skill exists with SkillType 'Other'
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillName = :skill_name AND SkillType = 'Other'"), {'skill_name': custom_skill_name}).scalar()
+            if not result:
+                # Insert new custom skill
+                db.session.execute(
+                    text("INSERT INTO Skill (SkillId, SkillName, SkillType) VALUES ((SELECT COALESCE(MAX(SkillId), 0) + 1 FROM Skill), :skill_name, 'Other')"),
+                    {'skill_name': custom_skill_name}
+                )
+                skill_id = db.session.execute(text("SELECT MAX(SkillId) FROM Skill")).scalar()
+            else:
+                skill_id = result
+        else:
+            # Validate existing skillId
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillId = :skill_id"), {'skill_id': skill_id}).scalar()
+            if not result:
+                return jsonify({'status': 'error', 'message': f'Skill {skill_id} not found'}), 404
+
+        # Check for existing goal with the same EmployeeId and SkillId
+        existing_goal = db.session.execute(
+            text("SELECT GoalId, TargetDate FROM EmployeeGoal WHERE EmployeeId = :employee_id AND SkillId = :skill_id"),
+            {'employee_id': employee_id, 'skill_id': skill_id}
+        ).fetchone()
+
+        if existing_goal:
+            # Update existing goal's TargetDate if the new date is different and in the future
+            existing_target_date = existing_goal.TargetDate
+            if target_date_dt > existing_target_date:
+                db.session.execute(
+                    text("UPDATE EmployeeGoal SET TargetDate = :target_date WHERE GoalId = :goal_id"),
+                    {'target_date': target_date, 'goal_id': existing_goal.GoalId}
+                )
+                db.session.commit()
+                return jsonify({
+                    'status': 'success',
+                    'data': {
+                        'goalId': existing_goal.GoalId,
+                        'employeeId': employee_id,
+                        'skillId': skill_id,
+                        'customSkillName': custom_skill_name if custom_skill_name else None,
+                        'targetDate': target_date,
+                        'setByEmployeeId': set_by_employee_id,
+                        'createdOn': existing_target_date.strftime('%Y-%m-%dT%H:%M:%S')
+                    },
+                    'message': 'Goal target date updated successfully'
+                }), 200
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'A goal for this skill already exists with a later or same target date'
+                }), 400
+        else:
+            # Insert new goal
+            result = db.session.execute(
+                text("""
+                    INSERT INTO EmployeeGoal (EmployeeId, SkillId, TargetDate, SetByEmployeeId, CreatedOn)
+                    OUTPUT INSERTED.GoalId
+                    VALUES (:employee_id, :skill_id, :target_date, :set_by_employee_id, GETDATE())
+                """),
+                {'employee_id': employee_id, 'skill_id': skill_id, 'target_date': target_date, 'set_by_employee_id': set_by_employee_id}
+            )
+            goal_id = result.scalar()
+            db.session.commit()
+
+            return jsonify({
+                'status': 'success',
+                'data': {
+                    'goalId': goal_id,
+                    'employeeId': employee_id,
+                    'skillId': skill_id,
+                    'customSkillName': custom_skill_name if custom_skill_name else None,
+                    'targetDate': target_date,
+                    'setByEmployeeId': set_by_employee_id,
+                    'createdOn': datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+                },
+                'message': 'Goal created successfully'
+            }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+        
+# GET /api/goals/employee/<employeeId> - Fetch goals for an employee
+@app.route('/api/goals/employee/<employeeId>', methods=['GET'])
+def get_employee_goals(employeeId):
+    try:
+        # Validate employeeId
+        result = db.session.execute(text("SELECT EmployeeId FROM Employee WHERE EmployeeId = :employee_id"), {'employee_id': employeeId}).scalar()
+        if not result:
+            return jsonify({'status': 'error', 'message': f'Employee {employeeId} not found'}), 404
+
+        # Fetch goals
+        result = db.session.execute(
+            text("""
+                SELECT g.GoalId, g.EmployeeId, e.FirstName + ' ' + e.LastName AS EmployeeName,
+                       g.SkillId, s.SkillName, g.TargetDate,
+                       g.SetByEmployeeId, se.FirstName + ' ' + se.LastName AS SetByName,
+                       CASE WHEN g.EmployeeId = g.SetByEmployeeId THEN 'self_' ELSE 'others_' END + s.SkillType AS GoalType
+                FROM EmployeeGoal g
+                JOIN Employee e ON g.EmployeeId = e.EmployeeId
+                JOIN Skill s ON g.SkillId = s.SkillId
+                JOIN Employee se ON g.SetByEmployeeId = se.EmployeeId
+                WHERE g.EmployeeId = :employee_id
+            """),
+            {'employee_id': employeeId}
+        )
+        goals = [
+            {
+                'goalId': row[0],
+                'employeeId': row[1],
+                'employeeName': row[2],
+                'skillId': row[3],
+                'skillName': row[4],
+                'targetDate': row[5].strftime('%Y-%m-%d') if row[5] else None,
+                'setByEmployeeId': row[6],
+                'setByName': row[7],
+                'goalType': row[8]
+            } for row in result.fetchall()
+        ]
+
+        print(goals)
+
+        return jsonify({'status': 'success', 'data': goals}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# PUT /api/goals/<goalId> - Update a goal
+@app.route('/api/goals/<int:goalId>', methods=['PUT'])
+def update_goal(goalId):
+    try:
+        data = request.get_json()
+        skill_id = data.get('skillId')
+        custom_skill_name = data.get('customSkillName')
+        target_date = data.get('targetDate')
+
+        # Validate inputs
+        if not target_date:
+            return jsonify({'status': 'error', 'message': 'Missing required field: targetDate'}), 400
+
+        # Validate target date is in the future
+        try:
+            target_date_dt = datetime.strptime(target_date, '%Y-%m-%d')
+            if target_date_dt <= datetime.now():
+                return jsonify({'status': 'error', 'message': 'Target date must be in the future'}), 400
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Invalid date format, use YYYY-MM-DD'}), 400
+
+        # Validate goalId
+        result = db.session.execute(text("SELECT GoalId FROM EmployeeGoal WHERE GoalId = :goal_id"), {'goal_id': goalId}).scalar()
+        if not result:
+            return jsonify({'status': 'error', 'message': f'Goal {goalId} not found'}), 404
+
+        # Handle skill update
+        if custom_skill_name:
+            # Check if custom skill exists with SkillType 'Other'
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillName = :skill_name AND SkillType = 'Other'"), {'skill_name': custom_skill_name}).scalar()
+            if not result:
+                # Insert new custom skill
+                db.session.execute(
+                    text("INSERT INTO Skill (SkillId, SkillName, SkillType) VALUES ((SELECT COALESCE(MAX(SkillId), 0) + 1 FROM Skill), :skill_name, 'Other')"),
+                    {'skill_name': custom_skill_name}
+                )
+                skill_id = db.session.execute(text("SELECT MAX(SkillId) FROM Skill")).scalar()
+            else:
+                skill_id = result
+        elif skill_id:
+            # Validate existing skillId
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillId = :skill_id"), {'skill_id': skill_id}).scalar()
+            if not result:
+                return jsonify({'status': 'error', 'message': f'Skill {skill_id} not found'}), 404
+
+        # Update goal
+        db.session.execute(
+            text("""
+                UPDATE EmployeeGoal
+                SET SkillId = :skill_id, TargetDate = :target_date
+                WHERE GoalId = :goal_id
+            """),
+            {
+                'skill_id': skill_id,
+                'target_date': target_date,
+                'goal_id': goalId
+            }
+        )
+        db.session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'goalId': goalId,
+                'skillId': skill_id,
+                'customSkillName': custom_skill_name if custom_skill_name else None,
+                'targetDate': target_date
+            },
+            'message': 'Goal updated successfully'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# DELETE /api/goals/<goalId> - Delete a goal
+@app.route('/api/goals/<int:goalId>', methods=['DELETE'])
+def delete_goal(goalId):
+    try:
+        # Validate goalId
+        result = db.session.execute(text("SELECT GoalId FROM EmployeeGoal WHERE GoalId = :goal_id"), {'goal_id': goalId}).scalar()
+        if not result:
+            return jsonify({'status': 'error', 'message': f'Goal {goalId} not found'}), 404
+
+        # Delete goal
+        db.session.execute(
+            text("DELETE FROM EmployeeGoal WHERE GoalId = :goal_id"),
+            {'goal_id': goalId}
+        )
+        db.session.commit()
+
+        return jsonify({'status': 'success', 'data': {}, 'message': 'Goal deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
