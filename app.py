@@ -2545,8 +2545,255 @@ def get_skills():
 
 
 
+# ================================================================================
 
+# POST /api/goals - Create a goal (for self or others, tech or other)
+@app.route('/api/goals', methods=['POST'])
+def create_goal():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        skill_id = data.get('skillId')
+        custom_skill_name = data.get('customSkillName')
+        target_date = data.get('targetDate')
+        set_by_employee_id = data.get('setByEmployeeId', employee_id)  # Default to employeeId for self
 
+        # Validate inputs
+        required_fields = [employee_id, target_date]
+        if not all(required_fields):
+            return jsonify({'status': 'error', 'message': 'Missing required fields: employeeId, targetDate'}), 400
+        if not skill_id and not custom_skill_name:
+            return jsonify({'status': 'error', 'message': 'Either skillId or customSkillName is required'}), 400
+
+        # Validate target date is in the future
+        try:
+            target_date_dt = datetime.strptime(target_date, '%Y-%m-%d')
+            if target_date_dt <= datetime.now():
+                return jsonify({'status': 'error', 'message': 'Target date must be in the future'}), 400
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Invalid date format, use YYYY-MM-DD'}), 400
+
+        # Handle skill (existing or custom)
+        if custom_skill_name:
+            # Check if custom skill exists with SkillType 'Other'
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillName = :skill_name AND SkillType = 'Other'"), {'skill_name': custom_skill_name}).scalar()
+            if not result:
+                # Insert new custom skill
+                db.session.execute(
+                    text("INSERT INTO Skill (SkillId, SkillName, SkillType) VALUES ((SELECT COALESCE(MAX(SkillId), 0) + 1 FROM Skill), :skill_name, 'Other')"),
+                    {'skill_name': custom_skill_name}
+                )
+                skill_id = db.session.execute(text("SELECT MAX(SkillId) FROM Skill")).scalar()
+            else:
+                skill_id = result
+        else:
+            # Validate existing skillId
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillId = :skill_id"), {'skill_id': skill_id}).scalar()
+            if not result:
+                return jsonify({'status': 'error', 'message': f'Skill {skill_id} not found'}), 404
+
+        # Check for existing goal with the same EmployeeId and SkillId
+        existing_goal = db.session.execute(
+            text("SELECT GoalId, TargetDate FROM EmployeeGoal WHERE EmployeeId = :employee_id AND SkillId = :skill_id"),
+            {'employee_id': employee_id, 'skill_id': skill_id}
+        ).fetchone()
+
+        if existing_goal:
+            # Update existing goal's TargetDate if the new date is different and in the future
+            existing_target_date = existing_goal.TargetDate
+            if target_date_dt > existing_target_date:
+                db.session.execute(
+                    text("UPDATE EmployeeGoal SET TargetDate = :target_date WHERE GoalId = :goal_id"),
+                    {'target_date': target_date, 'goal_id': existing_goal.GoalId}
+                )
+                db.session.commit()
+                return jsonify({
+                    'status': 'success',
+                    'data': {
+                        'goalId': existing_goal.GoalId,
+                        'employeeId': employee_id,
+                        'skillId': skill_id,
+                        'customSkillName': custom_skill_name if custom_skill_name else None,
+                        'targetDate': target_date,
+                        'setByEmployeeId': set_by_employee_id,
+                        'createdOn': existing_target_date.strftime('%Y-%m-%dT%H:%M:%S')
+                    },
+                    'message': 'Goal target date updated successfully'
+                }), 200
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'A goal for this skill already exists with a later or same target date'
+                }), 400
+        else:
+            # Insert new goal
+            result = db.session.execute(
+                text("""
+                    INSERT INTO EmployeeGoal (EmployeeId, SkillId, TargetDate, SetByEmployeeId, CreatedOn)
+                    OUTPUT INSERTED.GoalId
+                    VALUES (:employee_id, :skill_id, :target_date, :set_by_employee_id, GETDATE())
+                """),
+                {'employee_id': employee_id, 'skill_id': skill_id, 'target_date': target_date, 'set_by_employee_id': set_by_employee_id}
+            )
+            goal_id = result.scalar()
+            db.session.commit()
+
+            return jsonify({
+                'status': 'success',
+                'data': {
+                    'goalId': goal_id,
+                    'employeeId': employee_id,
+                    'skillId': skill_id,
+                    'customSkillName': custom_skill_name if custom_skill_name else None,
+                    'targetDate': target_date,
+                    'setByEmployeeId': set_by_employee_id,
+                    'createdOn': datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+                },
+                'message': 'Goal created successfully'
+            }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+        
+# GET /api/goals/employee/<employeeId> - Fetch goals for an employee
+@app.route('/api/goals/employee/<employeeId>', methods=['GET'])
+def get_employee_goals(employeeId):
+    try:
+        # Validate employeeId
+        result = db.session.execute(text("SELECT EmployeeId FROM Employee WHERE EmployeeId = :employee_id"), {'employee_id': employeeId}).scalar()
+        if not result:
+            return jsonify({'status': 'error', 'message': f'Employee {employeeId} not found'}), 404
+
+        # Fetch goals
+        result = db.session.execute(
+            text("""
+                SELECT g.GoalId, g.EmployeeId, e.FirstName + ' ' + e.LastName AS EmployeeName,
+                       g.SkillId, s.SkillName, g.TargetDate,
+                       g.SetByEmployeeId, se.FirstName + ' ' + se.LastName AS SetByName,
+                       CASE WHEN g.EmployeeId = g.SetByEmployeeId THEN 'self_' ELSE 'others_' END + s.SkillType AS GoalType
+                FROM EmployeeGoal g
+                JOIN Employee e ON g.EmployeeId = e.EmployeeId
+                JOIN Skill s ON g.SkillId = s.SkillId
+                JOIN Employee se ON g.SetByEmployeeId = se.EmployeeId
+                WHERE g.EmployeeId = :employee_id
+            """),
+            {'employee_id': employeeId}
+        )
+        goals = [
+            {
+                'goalId': row[0],
+                'employeeId': row[1],
+                'employeeName': row[2],
+                'skillId': row[3],
+                'skillName': row[4],
+                'targetDate': row[5].strftime('%Y-%m-%d') if row[5] else None,
+                'setByEmployeeId': row[6],
+                'setByName': row[7],
+                'goalType': row[8]
+            } for row in result.fetchall()
+        ]
+
+        print(goals)
+
+        return jsonify({'status': 'success', 'data': goals}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# PUT /api/goals/<goalId> - Update a goal
+@app.route('/api/goals/<int:goalId>', methods=['PUT'])
+def update_goal(goalId):
+    try:
+        data = request.get_json()
+        skill_id = data.get('skillId')
+        custom_skill_name = data.get('customSkillName')
+        target_date = data.get('targetDate')
+
+        # Validate inputs
+        if not target_date:
+            return jsonify({'status': 'error', 'message': 'Missing required field: targetDate'}), 400
+
+        # Validate target date is in the future
+        try:
+            target_date_dt = datetime.strptime(target_date, '%Y-%m-%d')
+            if target_date_dt <= datetime.now():
+                return jsonify({'status': 'error', 'message': 'Target date must be in the future'}), 400
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'Invalid date format, use YYYY-MM-DD'}), 400
+
+        # Validate goalId
+        result = db.session.execute(text("SELECT GoalId FROM EmployeeGoal WHERE GoalId = :goal_id"), {'goal_id': goalId}).scalar()
+        if not result:
+            return jsonify({'status': 'error', 'message': f'Goal {goalId} not found'}), 404
+
+        # Handle skill update
+        if custom_skill_name:
+            # Check if custom skill exists with SkillType 'Other'
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillName = :skill_name AND SkillType = 'Other'"), {'skill_name': custom_skill_name}).scalar()
+            if not result:
+                # Insert new custom skill
+                db.session.execute(
+                    text("INSERT INTO Skill (SkillId, SkillName, SkillType) VALUES ((SELECT COALESCE(MAX(SkillId), 0) + 1 FROM Skill), :skill_name, 'Other')"),
+                    {'skill_name': custom_skill_name}
+                )
+                skill_id = db.session.execute(text("SELECT MAX(SkillId) FROM Skill")).scalar()
+            else:
+                skill_id = result
+        elif skill_id:
+            # Validate existing skillId
+            result = db.session.execute(text("SELECT SkillId FROM Skill WHERE SkillId = :skill_id"), {'skill_id': skill_id}).scalar()
+            if not result:
+                return jsonify({'status': 'error', 'message': f'Skill {skill_id} not found'}), 404
+
+        # Update goal
+        db.session.execute(
+            text("""
+                UPDATE EmployeeGoal
+                SET SkillId = :skill_id, TargetDate = :target_date
+                WHERE GoalId = :goal_id
+            """),
+            {
+                'skill_id': skill_id,
+                'target_date': target_date,
+                'goal_id': goalId
+            }
+        )
+        db.session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'goalId': goalId,
+                'skillId': skill_id,
+                'customSkillName': custom_skill_name if custom_skill_name else None,
+                'targetDate': target_date
+            },
+            'message': 'Goal updated successfully'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# DELETE /api/goals/<goalId> - Delete a goal
+@app.route('/api/goals/<int:goalId>', methods=['DELETE'])
+def delete_goal(goalId):
+    try:
+        # Validate goalId
+        result = db.session.execute(text("SELECT GoalId FROM EmployeeGoal WHERE GoalId = :goal_id"), {'goal_id': goalId}).scalar()
+        if not result:
+            return jsonify({'status': 'error', 'message': f'Goal {goalId} not found'}), 404
+
+        # Delete goal
+        db.session.execute(
+            text("DELETE FROM EmployeeGoal WHERE GoalId = :goal_id"),
+            {'goal_id': goalId}
+        )
+        db.session.commit()
+
+        return jsonify({'status': 'success', 'data': {}, 'message': 'Goal deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 if __name__ == '__main__':
