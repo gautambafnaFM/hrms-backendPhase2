@@ -2796,5 +2796,278 @@ def delete_goal(goalId):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+#================================================================================
+
+
+# Get Leads
+@app.route('/api/capability-leads', methods=['GET'])
+def get_capability_leads():
+    try:
+        result = db.session.execute(text("SELECT CapabilityDevelopmentLeadId, EmployeeId FROM CapabilityDevelopmentLead"))
+        leads = [{'CapabilityDevelopmentLeadId': row[0], 'EmployeeId': row[1]} for row in result.fetchall()]
+        return jsonify({'status': 'success', 'data': leads, 'message': 'Capability Development Leads retrieved successfully'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# create Lead
+@app.route('/api/capability-leads', methods=['POST'])
+def create_capability_lead():
+    try:
+        data = request.get_json()
+        employee_ids = data.get('employeeIds')
+
+        if not employee_ids or not isinstance(employee_ids, list) or len(employee_ids) == 0:
+            return jsonify({'status': 'error', 'message': 'Please select at least one employee'}), 400
+
+        new_leads = []
+
+        for emp_id in employee_ids:
+            # Check if employee is already a lead
+            result = db.session.execute(
+                text("SELECT CapabilityDevelopmentLeadId FROM CapabilityDevelopmentLead WHERE EmployeeId = :emp_id"),
+                {'emp_id': emp_id}
+            ).fetchone()
+
+            if result:
+                continue  # already exists
+
+            # Insert new lead
+            result = db.session.execute(
+                text("""INSERT INTO CapabilityDevelopmentLead (EmployeeId)
+                OUTPUT INSERTED.CapabilityDevelopmentLeadId
+                VALUES (:emp_id)"""),
+                {'emp_id': emp_id}
+            )
+            # new_leads.append(result.scalar())
+            # new_leads.append({'EmployeeId': emp_id, 'CapabilityDevelopmentLeadId': lead_id})
+            lead_row = result.fetchone()
+            if lead_row:
+                new_leads.append({'EmployeeId': emp_id, 'CapabilityDevelopmentLeadId': lead_row[0]})
+
+        db.session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'data': new_leads,
+            'message': 'Capability Development Leads added successfully'
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+# # Update Lead
+# @app.route('/api/capability-leads/<int:leadId>', methods=['PUT'])
+# def update_capability_lead(leadId):
+#     try:
+#         data = request.get_json()
+#         new_employee_id = data.get('employeeId')
+
+#         if not new_employee_id:
+#             return jsonify({'status': 'error', 'message': 'EmployeeId is required'}), 400
+
+#         existing_lead = db.session.execute(
+#             text("SELECT EmployeeId FROM CapabilityDevelopmentLead WHERE CapabilityDevelopmentLeadId = :lead_id"),
+#             {'lead_id': leadId}
+#         ).fetchone()
+
+#         if not existing_lead:
+#             return jsonify({'status': 'error', 'message': 'Lead not found'}), 404
+
+#         duplicate_check = db.session.execute(
+#             text("SELECT 1 FROM CapabilityDevelopmentLead WHERE EmployeeId = :emp_id AND CapabilityDevelopmentLeadId != :lead_id"),
+#             {'emp_id': new_employee_id, 'lead_id': leadId}
+#         ).fetchone()
+
+#         if duplicate_check:
+#             return jsonify({'status': 'error', 'message': 'Employee is already a lead'}), 400
+
+#         db.session.execute(
+#             text("UPDATE CapabilityDevelopmentLead SET EmployeeId = :emp_id, UpdatedDate = CURRENT_TIMESTAMP WHERE CapabilityDevelopmentLeadId = :lead_id"),
+#             {'emp_id': new_employee_id, 'lead_id': leadId}
+#         )
+#         db.session.commit()
+
+#         return jsonify({
+#             'status': 'success',
+#             'data': {'CapabilityDevelopmentLeadId': leadId, 'EmployeeId': new_employee_id},
+#             'message': 'Capability Development Lead updated successfully'
+#         }), 200
+#     except Exception as e:
+#         db.session.rollback()
+#         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+# Delete Lead
+@app.route('/api/capability-leads/<int:leadId>', methods=['DELETE'])
+def delete_capability_lead(leadId):
+    try:
+        # assignment_exists = db.session.execute(
+        #     text("SELECT 1 FROM CapabilityDevelopmentLeadAssignment WHERE CapabilityDevelopmentLeadId = :lead_id"),
+        #     {'lead_id': leadId}
+        # ).fetchone()
+
+        # if assignment_exists:
+        #     return jsonify({'status': 'error', 'message': 'Cannot delete lead with existing assignments'}), 400
+
+        assignments_to_delete = db.session.execute(
+            text("""
+                SELECT CapabilityDevelopmentLeadAssignmentId 
+                FROM CapabilityDevelopmentLeadAssignment 
+                WHERE CapabilityDevelopmentLeadId = :lead_id
+            """),
+            {'lead_id': leadId}
+        ).fetchall()
+        assignment_ids = [row[0] for row in assignments_to_delete]
+
+        db.session.execute(
+            text("DELETE FROM CapabilityDevelopmentLead WHERE CapabilityDevelopmentLeadId = :lead_id"),
+            {'lead_id': leadId}
+        )
+        db.session.commit()
+
+        # return jsonify({'status': 'success', 'data': {}, 'message': 'Capability Development Lead and its assignments deleted successfully'}), 200
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'deletedAssignmentIds': assignment_ids,
+                'deletedLeadId': leadId
+            },
+            'message': 'Capability Development Lead and related assignments deleted successfully'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# Get Assigned Capability Leads
+@app.route('/api/assigned-capability-leads', methods=['GET'])
+def get_assigned_capability_leads():
+    try:
+        result = db.session.execute(
+            text("SELECT CapabilityDevelopmentLeadAssignmentId, AssignedEmployeeId, CapabilityDevelopmentLeadId FROM CapabilityDevelopmentLeadAssignment")
+        )
+        assignments = [
+            {
+                'CapabilityDevelopmentLeadAssignmentId': row[0],
+                'AssignedEmployeeId': row[1],
+                'CapabilityDevelopmentLeadId': row[2]
+            } for row in result.fetchall()
+        ]
+        return jsonify({
+            'status': 'success',
+            'data': assignments,
+            'message': 'Assigned Capability Leads retrieved successfully'
+        }), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# Create Assignment
+@app.route('/api/assigned-capability-leads', methods=['POST'])
+def create_capability_assignment():
+    try:
+        data = request.get_json()
+        emp_id = data.get('employeeId')
+        lead_id = data.get('leadId')
+
+        if not emp_id or not lead_id:
+            return jsonify({'status': 'error', 'message': 'EmployeeId and leadId are required'}), 400
+
+        duplicate = db.session.execute(
+            text("SELECT 1 FROM CapabilityDevelopmentLeadAssignment WHERE AssignedEmployeeId = :emp_id AND CapabilityDevelopmentLeadId = :lead_id"),
+            {'emp_id': emp_id, 'lead_id': lead_id}
+        ).fetchone()
+
+        if duplicate:
+            return jsonify({'status': 'error', 'message': 'This employee already has an assignment with this lead'}), 400
+
+        result = db.session.execute(
+            text("""
+            INSERT INTO CapabilityDevelopmentLeadAssignment (AssignedEmployeeId, CapabilityDevelopmentLeadId)
+            OUTPUT INSERTED.CapabilityDevelopmentLeadAssignmentId
+            VALUES (:emp_id, :lead_id)"""),
+            {'emp_id': emp_id, 'lead_id': lead_id}
+        )
+        assignment_id = result.scalar()
+        db.session.commit()
+
+        # assignment_id = db.session.execute(text("SELECT SCOPE_IDENTITY()" if db.engine.name == 'mssql' else "SELECT last_insert_rowid()")).scalar()
+
+        return jsonify({
+            'status': 'success',
+            'data': {'CapabilityDevelopmentLeadAssignmentId': assignment_id},
+            'message': 'Assignment created successfully'
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
+# Update Assignment
+@app.route('/api/assigned-capability-leads/<int:assignmentId>', methods=['PUT'])
+def update_capability_assignment(assignmentId):
+    try:
+        data = request.get_json()
+        emp_id = data.get('employeeId')
+        lead_id = data.get('leadId')
+
+        if not emp_id or not lead_id:
+            return jsonify({'status': 'error', 'message': 'EmployeeId and leadId are required'}), 400
+
+        exists = db.session.execute(
+            text("SELECT 1 FROM CapabilityDevelopmentLeadAssignment WHERE CapabilityDevelopmentLeadAssignmentId = :id"),
+            {'id': assignmentId}
+        ).fetchone()
+
+        if not exists:
+            return jsonify({'status': 'error', 'message': 'Assignment not found'}), 404
+
+        duplicate = db.session.execute(
+            text("SELECT 1 FROM CapabilityDevelopmentLeadAssignment WHERE AssignedEmployeeId = :emp_id AND CapabilityDevelopmentLeadId = :lead_id AND CapabilityDevelopmentLeadAssignmentId != :id"),
+            {'emp_id': emp_id, 'lead_id': lead_id, 'id': assignmentId}
+        ).fetchone()
+
+        if duplicate:
+            return jsonify({'status': 'error', 'message': 'This employee already has an assignment with this lead'}), 400
+
+        db.session.execute(
+            text("UPDATE CapabilityDevelopmentLeadAssignment SET AssignedEmployeeId = :emp_id, CapabilityDevelopmentLeadId = :lead_id, UpdatedDate = CURRENT_TIMESTAMP WHERE CapabilityDevelopmentLeadAssignmentId = :id"),
+            {'emp_id': emp_id, 'lead_id': lead_id, 'id': assignmentId}
+        )
+        db.session.commit()
+
+        return jsonify({
+            'status': 'success',
+            'data': {'CapabilityDevelopmentLeadAssignmentId': assignmentId},
+            'message': 'Assignment updated successfully'
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# Delete Assignment
+@app.route('/api/assigned-capability-leads/<int:assignmentId>', methods=['DELETE'])
+def delete_capability_assignment(assignmentId):
+    try:
+        db.session.execute(
+            text("DELETE FROM CapabilityDevelopmentLeadAssignment WHERE CapabilityDevelopmentLeadAssignmentId = :id"),
+            {'id': assignmentId}
+        )
+        db.session.commit()
+        return jsonify({'status': 'success', 'data': {}, 'message': 'Assignment deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+
 if __name__ == '__main__':
     app.run("0.0.0.0", port=7000, debug=True)
