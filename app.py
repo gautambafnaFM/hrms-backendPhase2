@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from io import BytesIO
 import os
-import urllib.parse
+# import urllib.parse
 from dotenv import load_dotenv
 from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
@@ -21,7 +21,7 @@ import threading
 from flask_login import login_required
 from extensions import app, db
 from sqlalchemy import text  # ✅ required
-import pdfkit
+
 from jinja2 import Template
 import tempfile
 from num2words import num2words
@@ -37,8 +37,8 @@ from email.mime.text import MIMEText
 import smtplib
 from num2words import num2words
 from sqlalchemy import text
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+# from reportlab.pdfgen import canvas
+# from reportlab.lib.pagesizes import letter
 
 
 
