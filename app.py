@@ -1,5 +1,5 @@
 from dotenv.main import rewrite
-from flask import Flask, request,jsonify
+from flask import Flask, request,jsonify, render_template
 from sqlalchemy.engine import cursor
 from extensions import *  # Importing db from extension.py
 from flask_sqlalchemy import SQLAlchemy
@@ -21,12 +21,29 @@ import threading
 from flask_login import login_required
 from extensions import app, db
 from sqlalchemy import text  # ✅ required
-
+import pdfkit
+from jinja2 import Template
+import tempfile
+from num2words import num2words
+from email.mime.application import MIMEApplication
+from flask import request, jsonify, render_template
+from xhtml2pdf import pisa
+from io import BytesIO
+from datetime import datetime
+import os
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import smtplib
+from num2words import num2words
+from sqlalchemy import text
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 
 
 
 TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com", "Parag.Khandekar@flairminds.com"]
-# TO_ADDRESSES="gautam.bafna@flairminds.com"
+# TO_ADDRESSES="suraj.paikekar@flairminds.com"
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 # @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
 # @scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
@@ -1670,6 +1687,7 @@ def get_incomplete_employees():
         return jsonify({'error': str(e)}), 500
 
 @scheduler.task('cron', id='send_employees_in_office_email', hour=8, minute=00)
+# @scheduler.task('cron', id='send_employees_in_office_email', minute=1)
 def send_employees_in_office_email():
     
     with scheduler.app.app_context():
@@ -1692,7 +1710,7 @@ def send_employees_in_office_email():
                             LastName,
                             EmploymentStatus
                         FROM Employee
-                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee')
+                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee', 'Intern', 'Active', 'Resigned')
                     """)
                 ).fetchall()
 
@@ -1843,7 +1861,7 @@ def send_employees_in_office_email2():
                             LastName,
                             EmploymentStatus
                         FROM Employee
-                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee')
+                        WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee', 'Intern', 'Active', 'Resigned')
                     """)
                 ).fetchall()
 
@@ -1971,7 +1989,19 @@ def send_employees_in_office_email2():
 
 
 
-# ===============================================================================
+#================================================================================
+
+# # for testing send_employees_in_office_email2-scheduler
+# @app.route('/trigger-email', methods=['POST'])
+# def trigger_email():
+#     print("Triggered from Postman")
+#     with app.app_context():
+#         send_employees_in_office_email2()
+#     return {"message": "Email trigger executed successfully"}, 200
+
+
+
+# =========================   Evaluators Adding   ======================================================
 
 
 import logging
@@ -2226,6 +2256,32 @@ def get_all_employee_evaluators():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/HRFunctionality/GetAllEmployeesForEvaluators/<EvaluatorId>', methods=['GET'])
+def get_all_employees_for_evaluators(EvaluatorId):
+    try:
+        print("EvaluatorId --- " , EvaluatorId)
+        result = db.session.execute(text("""
+            SELECT 
+                e1.EmployeeId AS employeeId,
+                e1.FirstName,
+                e1.LastName
+            FROM EmployeeEvaluators ee
+            JOIN Employee e1 ON ee.EmpId = e1.EmployeeId
+            WHERE ee.EvaluatorId = :evaluator_id
+        """), {"evaluator_id": EvaluatorId})
+
+        rows = [{
+            "employeeId": row.employeeId,
+            "firstName": row.FirstName,
+            "lastName": row.LastName
+        } for row in result]
+
+        print("rows --- ", rows)
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 
 from flask import request, jsonify
 from sqlalchemy import text
@@ -2255,7 +2311,8 @@ def delete_evaluators():
 
 
 
-# ==============================================================
+# ==========================     Skill Evaluations   ====================================
+
 @app.route('/api/employees/skills', methods=['GET'])
 def get_assigned_employees_skills():
     try:
@@ -2545,7 +2602,7 @@ def get_skills():
 
 
 
-# ================================================================================
+# ==================================     Goal Setting    ==============================================
 
 # POST /api/goals - Create a goal (for self or others, tech or other)
 @app.route('/api/goals', methods=['POST'])
@@ -2656,7 +2713,50 @@ def create_goal():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
         
-# GET /api/goals/employee/<employeeId> - Fetch goals for an employee
+# # GET /api/goals/employee/<employeeId> - Fetch goals for an employee
+# @app.route('/api/goals/employee/<employeeId>', methods=['GET'])
+# def get_employee_goals(employeeId):
+#     try:
+#         # Validate employeeId
+#         result = db.session.execute(text("SELECT EmployeeId FROM Employee WHERE EmployeeId = :employee_id"), {'employee_id': employeeId}).scalar()
+#         if not result:
+#             return jsonify({'status': 'error', 'message': f'Employee {employeeId} not found'}), 404
+
+#         # Fetch goals
+#         result = db.session.execute(
+#             text("""
+#                 SELECT g.GoalId, g.EmployeeId, e.FirstName + ' ' + e.LastName AS EmployeeName,
+#                        g.SkillId, s.SkillName, g.TargetDate,
+#                        g.SetByEmployeeId, se.FirstName + ' ' + se.LastName AS SetByName,
+#                        CASE WHEN g.EmployeeId = g.SetByEmployeeId THEN 'self_' ELSE 'others_' END + s.SkillType AS GoalType
+#                 FROM EmployeeGoal g
+#                 JOIN Employee e ON g.EmployeeId = e.EmployeeId
+#                 JOIN Skill s ON g.SkillId = s.SkillId
+#                 JOIN Employee se ON g.SetByEmployeeId = se.EmployeeId
+#                 WHERE g.EmployeeId = :employee_id
+#             """),
+#             {'employee_id': employeeId}
+#         )
+#         goals = [
+#             {
+#                 'goalId': row[0],
+#                 'employeeId': row[1],
+#                 'employeeName': row[2],
+#                 'skillId': row[3],
+#                 'skillName': row[4],
+#                 'targetDate': row[5].strftime('%Y-%m-%d') if row[5] else None,
+#                 'setByEmployeeId': row[6],
+#                 'setByName': row[7],
+#                 'goalType': row[8]
+#             } for row in result.fetchall()
+#         ]
+
+#         print(goals)
+
+#         return jsonify({'status': 'success', 'data': goals}), 200
+#     except Exception as e:
+#         return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/api/goals/employee/<employeeId>', methods=['GET'])
 def get_employee_goals(employeeId):
     try:
@@ -2665,7 +2765,7 @@ def get_employee_goals(employeeId):
         if not result:
             return jsonify({'status': 'error', 'message': f'Employee {employeeId} not found'}), 404
 
-        # Fetch goals
+        # Fetch goals where the employee is either the goal owner or the setter
         result = db.session.execute(
             text("""
                 SELECT g.GoalId, g.EmployeeId, e.FirstName + ' ' + e.LastName AS EmployeeName,
@@ -2676,7 +2776,7 @@ def get_employee_goals(employeeId):
                 JOIN Employee e ON g.EmployeeId = e.EmployeeId
                 JOIN Skill s ON g.SkillId = s.SkillId
                 JOIN Employee se ON g.SetByEmployeeId = se.EmployeeId
-                WHERE g.EmployeeId = :employee_id
+                WHERE g.EmployeeId = :employee_id OR g.SetByEmployeeId = :employee_id
             """),
             {'employee_id': employeeId}
         )
@@ -2693,8 +2793,6 @@ def get_employee_goals(employeeId):
                 'goalType': row[8]
             } for row in result.fetchall()
         ]
-
-        print(goals)
 
         return jsonify({'status': 'success', 'data': goals}), 200
     except Exception as e:
@@ -2796,7 +2894,7 @@ def delete_goal(goalId):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-#================================================================================
+#=========================    Capability Development Lead    =======================================================
 
 
 # Get Leads
@@ -2856,50 +2954,6 @@ def create_capability_lead():
     except Exception as e:
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-
-# # Update Lead
-# @app.route('/api/capability-leads/<int:leadId>', methods=['PUT'])
-# def update_capability_lead(leadId):
-#     try:
-#         data = request.get_json()
-#         new_employee_id = data.get('employeeId')
-
-#         if not new_employee_id:
-#             return jsonify({'status': 'error', 'message': 'EmployeeId is required'}), 400
-
-#         existing_lead = db.session.execute(
-#             text("SELECT EmployeeId FROM CapabilityDevelopmentLead WHERE CapabilityDevelopmentLeadId = :lead_id"),
-#             {'lead_id': leadId}
-#         ).fetchone()
-
-#         if not existing_lead:
-#             return jsonify({'status': 'error', 'message': 'Lead not found'}), 404
-
-#         duplicate_check = db.session.execute(
-#             text("SELECT 1 FROM CapabilityDevelopmentLead WHERE EmployeeId = :emp_id AND CapabilityDevelopmentLeadId != :lead_id"),
-#             {'emp_id': new_employee_id, 'lead_id': leadId}
-#         ).fetchone()
-
-#         if duplicate_check:
-#             return jsonify({'status': 'error', 'message': 'Employee is already a lead'}), 400
-
-#         db.session.execute(
-#             text("UPDATE CapabilityDevelopmentLead SET EmployeeId = :emp_id, UpdatedDate = CURRENT_TIMESTAMP WHERE CapabilityDevelopmentLeadId = :lead_id"),
-#             {'emp_id': new_employee_id, 'lead_id': leadId}
-#         )
-#         db.session.commit()
-
-#         return jsonify({
-#             'status': 'success',
-#             'data': {'CapabilityDevelopmentLeadId': leadId, 'EmployeeId': new_employee_id},
-#             'message': 'Capability Development Lead updated successfully'
-#         }), 200
-#     except Exception as e:
-#         db.session.rollback()
-#         return jsonify({'status': 'error', 'message': str(e)}), 500
-
 
 
 # Delete Lead
@@ -3009,7 +3063,6 @@ def create_capability_assignment():
 
 
 
-
 # Update Assignment
 @app.route('/api/assigned-capability-leads/<int:assignmentId>', methods=['PUT'])
 def update_capability_assignment(assignmentId):
@@ -3066,6 +3119,378 @@ def delete_capability_assignment(assignmentId):
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+
+# =========================     Relieving Letters  ============================================================================================
+
+
+# Ensure the pdfs/ directory exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+FROM_ADDRESS = "flairmindshr@gmail.com" # Securely fetch email
+FROM_PASSWORD = "zvhj wpau jqor whkp" # Securely fetch password
+
+def send_email(to_address, subject, body):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = FROM_ADDRESS
+        msg['To'] = to_address
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(FROM_ADDRESS, FROM_PASSWORD)
+        server.sendmail(FROM_ADDRESS, to_address, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send email to {to_address}: {str(e)}")
+        return False
+
+# Fetch employee details for relieving letter dropdown
+@app.route('/api/employeeDetailsForRelievingLetter', methods=['GET'])
+def get_employee_details():
+    try:
+        result = db.session.execute(text("""
+            SELECT 
+                e.EmployeeId,
+                CONCAT(e.FirstName, ' ', e.LastName) AS EmployeeName,
+                e.DateOfJoining,
+                es.SubRoleName,
+                e.PersonalEmail
+            FROM Employee e
+            LEFT JOIN EmployeeSubRole es ON e.SubRole = es.SubRoleId
+        """))
+        employees = [
+            {
+                'EmployeeId': row[0],
+                'EmployeeName': row[1],
+                'DateOfJoining': row[2].isoformat() if row[2] else None,
+                'SubRoleName': row[3],
+                'PersonalEmail': row[4]
+            } for row in result
+        ]
+        return jsonify({'status': 'success', 'data': employees, 'message': 'Employee details fetched successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# Fetch all relieving letters (for HR to manage)
+@app.route('/api/hrRelievingLetters', methods=['GET'])
+def get_hr_relieving_letters():
+    try:
+        result = db.session.execute(text("""
+            SELECT id, employeeName, empId, designation, letterType, creationDate, lastWorkingDate,
+                   relievingDate, resignationDate, ctcSalary, bonus, variables, employeeEmail
+            FROM EmployeeRelievingLetters
+        """))
+        letters = [
+            {
+                'id': row[0],
+                'employeeName': row[1],
+                'empId': row[2],
+                'designation': row[3],
+                'letterType': row[4],
+                'creationDate': row[5].isoformat() if row[5] else None,
+                'lastWorkingDate': row[6].isoformat() if row[6] else None,
+                'relievingDate': row[7].isoformat() if row[7] else None,
+                'resignationDate': row[8].isoformat() if row[8] else None,
+                'ctcSalary': float(row[9]) if row[9] else None,
+                'bonus': float(row[10]) if row[10] else None,
+                'variables': float(row[11]) if row[11] else None,
+                'employeeEmail': row[12]
+            } for row in result
+        ]
+        return jsonify({'status': 'success', 'data': letters, 'message': 'Relieving letters fetched successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# Fetch all generated relieving letters for table
+@app.route('/api/relieving-letters', methods=['GET'])
+def get_relieving_letters():
+    try:
+        result = db.session.execute(text("""
+            SELECT id, employeeName, pdfPath, creationDate, employeeEmail
+            FROM EmployeeRelievingLetters
+        """))
+        letters = [
+            {
+                'id': row[0],
+                'employeeName': row[1],
+                'pdfPath': row[2],
+                'generationDate': row[3].isoformat() if row[3] else None,
+                'employeeEmail': row[4]
+            } for row in result
+        ]
+        return jsonify({'status': 'success', 'data': letters, 'message': 'Relieving letters fetched successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# Convert numbers to words
+def number_to_words(amount):
+    try:
+        return num2words(amount, to='cardinal', lang='en_IN').title() + " Rupees"
+    except:
+        return ""
+
+
+# Create a new relieving letter
+@app.route('/api/create-relieving-letter', methods=['POST'])
+def create_relieving_letter():
+    try:
+        data = request.get_json()
+        employee_id = data.get('employeeId')
+        employee_name = data.get('employeeName')
+        designation = data.get('designation')
+        joining_date = data.get('joiningDate')
+        last_working_date = data.get('lastWorkingDate')
+        relieving_date = data.get('relievingDate')
+        resignation_date = data.get('resignationDate')
+        ctc_salary = data.get('ctcSalary')
+        bonus = data.get('bonus')
+        variables = data.get('variables')
+        employee_email = data.get('employeeEmail')
+
+        if not all([employee_id, employee_name, designation, joining_date, last_working_date,
+                    relieving_date, resignation_date, ctc_salary, bonus, variables, employee_email]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+        try:
+            ctc_salary = float(ctc_salary)
+            bonus = float(bonus)
+            variables = float(variables)
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'CTC, Bonus, and Variables must be numbers'}), 400
+
+        # Prepare PDF filename and path
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        pdf_filename = f"Relieving_Letter_{employee_id}_{timestamp}.pdf"
+        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+
+        # Absolute path for logo inside /templates folder
+        logo_path = os.path.join(app.root_path, 'templates', 'flairminds-logo.jpg')
+
+        # Render Jinja HTML
+        html = render_template("relieving_letter_template.html",
+            employee_id=employee_id,
+            employee_name=employee_name,
+            designation=designation,
+            joining_date=joining_date,
+            last_working_date=last_working_date,
+            relieving_date=relieving_date,
+            resignation_date=resignation_date,
+            ctc=f"{ctc_salary:,.2f}",
+            ctc_words=number_to_words(ctc_salary),
+            bonus=f"{bonus:,.2f}",
+            variables=f"{variables:,.2f}",
+            todays_date=datetime.now().strftime("%d %B %Y"),
+            logo_path=logo_path
+        )
+
+        # Generate PDF
+        with open(pdf_path, "wb") as f:
+            result = pisa.CreatePDF(BytesIO(html.encode("utf-8")), dest=f)
+        if result.err:
+            return jsonify({'status': 'error', 'message': 'PDF generation failed'}), 500
+
+        # Email PDF
+        subject = 'Your Relieving Letter – FlairMinds'
+        body = f"""
+        <html>
+          <body>
+            <p>Dear {employee_name},</p>
+            <p>Please find your relieving letter attached.</p>
+            <p>Best regards,<br>FlairMinds Team</p>
+          </body>
+        </html>
+        """
+        attachment = MIMEApplication(open(pdf_path, 'rb').read(), _subtype='pdf')
+        attachment.add_header('Content-Disposition', 'attachment', filename=pdf_filename)
+
+        msg = MIMEMultipart()
+        msg['From'] = FROM_ADDRESS
+        msg['To'] = employee_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+        msg.attach(attachment)
+
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(FROM_ADDRESS, FROM_PASSWORD)
+            server.sendmail(FROM_ADDRESS, employee_email, msg.as_string())
+
+        # Store metadata
+        db.session.execute(text("""
+            INSERT INTO EmployeeRelievingLetters (
+                empId, employeeName, designation, letterType, creationDate,
+                lastWorkingDate, relievingDate, resignationDate, ctcSalary, bonus,
+                variables, pdfPath, employeeEmail
+            ) VALUES (
+                :empId, :employeeName, :designation, :letterType, :creationDate,
+                :lastWorkingDate, :relievingDate, :resignationDate, :ctcSalary, :bonus,
+                :variables, :pdfPath, :employeeEmail
+            )
+        """), {
+            'empId': employee_id,
+            'employeeName': employee_name,
+            'designation': designation,
+            'letterType': 'Relieving',
+            'creationDate': datetime.now().strftime('%Y-%m-%d'),
+            'lastWorkingDate': last_working_date,
+            'relievingDate': relieving_date,
+            'resignationDate': resignation_date,
+            'ctcSalary': ctc_salary,
+            'bonus': bonus,
+            'variables': variables,
+            'pdfPath': pdf_path,
+            'employeeEmail': employee_email
+        })
+        db.session.commit()
+
+        return jsonify({'status': 'success', 'message': 'Relieving letter generated and emailed successfully'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# Send relieving letter email
+@app.route('/api/sendRelievingLetterEmail/<int:letter_id>', methods=['POST'])
+def send_relieving_letter_email(letter_id):
+    try:
+        result = db.session.execute(
+            text("""
+                SELECT employeeName, employeeEmail, pdfPath
+                FROM EmployeeRelievingLetters
+                WHERE id = :id
+            """),
+            {'id': letter_id}
+        )
+        row = result.fetchone()
+        if not row:
+            return jsonify({'status': 'error', 'message': 'Letter not found'}), 404
+
+        employee_name, employee_email, pdf_path = row
+
+        if not os.path.exists(pdf_path):
+            return jsonify({'status': 'error', 'message': 'PDF file not found'}), 404
+
+        # Send email
+        subject = 'Your Relieving Letter – FlairMinds'
+        body = f"""
+        <html>
+          <body>
+            <p>Dear {employee_name},</p>
+            <p>Please find your relieving letter attached.</p>
+            <p>Best regards,<br>FlairMinds Team</p>
+          </body>
+        </html>
+        """
+        if not send_email(employee_email, subject, body):
+            raise Exception("Email sending failed")
+
+        with open(pdf_path, 'rb') as f:
+            attachment = MIMEApplication(f.read(), _subtype='pdf')
+            attachment.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
+            msg = MIMEMultipart()
+            msg['From'] = FROM_ADDRESS
+            msg['To'] = employee_email
+            msg['Cc'] = ''
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'html'))
+            msg.attach(attachment)
+
+            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+                server.starttls()
+                server.login(FROM_ADDRESS, FROM_PASSWORD)
+                server.sendmail(FROM_ADDRESS, [employee_email, ''], msg.as_string())
+
+        return jsonify({'status': 'success', 'data': {}, 'message': 'Email sent successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+# Update an existing relieving letter
+@app.route('/api/relievingLetter/<int:letter_id>', methods=['PUT'])
+def update_relieving_letter(letter_id):
+    try:
+        data = request.get_json()
+        last_working_date = data.get('lastWorkingDate')
+        relieving_date = data.get('relievingDate')
+        resignation_date = data.get('resignationDate')
+        ctc_salary = data.get('ctcSalary')
+        bonus = data.get('bonus')
+        variables = data.get('variables')
+
+        # Validate required fields
+        if not all([last_working_date, relieving_date, resignation_date, ctc_salary, bonus, variables]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+
+        # Convert amounts to numbers and validate
+        try:
+            ctc_salary = float(ctc_salary)
+            bonus = float(bonus)
+            variables = float(variables)
+        except ValueError:
+            return jsonify({'status': 'error', 'message': 'CTC, Bonus, and Variables must be valid numbers'}), 400
+
+        # Update relieving letter
+        db.session.execute(
+            text("""
+                UPDATE EmployeeRelievingLetters
+                SET lastWorkingDate = :lastWorkingDate,
+                    relievingDate = :relievingDate,
+                    resignationDate = :resignationDate,
+                    ctcSalary = :ctcSalary,
+                    bonus = :bonus,
+                    variables = :variables
+                WHERE id = :id
+            """),
+            {
+                'lastWorkingDate': last_working_date,
+                'relievingDate': relieving_date,
+                'resignationDate': resignation_date,
+                'ctcSalary': ctc_salary,
+                'bonus': bonus,
+                'variables': variables,
+                'id': letter_id
+            }
+        )
+        db.session.commit()
+        return jsonify({'status': 'success', 'data': {}, 'message': 'Relieving letter updated successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+# Download a relieving letter PDF
+@app.route('/api/download-relieving-letter/<int:id>', methods=['GET'])
+def download_relieving_letter(id):
+    try:
+        result = db.session.execute(
+            text("SELECT pdfPath FROM EmployeeRelievingLetters WHERE id = :id"),
+            {'id': id}
+        )
+        row = result.fetchone()
+        if not row:
+            return jsonify({'status': 'error', 'message': 'Letter not found'}), 404
+
+        pdf_path = row[0]
+        if not os.path.exists(pdf_path):
+            return jsonify({'status': 'error', 'message': 'PDF file not found'}), 404
+
+        return send_file(pdf_path, as_attachment=True)
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
+#=====================================================================================================
 
 
 

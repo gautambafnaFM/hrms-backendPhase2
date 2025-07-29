@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 10px 20px;
+    }
+    .logo {
+      width: 200px;
+      margin-bottom: 10px;
+    }
+    .date, .subject, .content, .signature {
+      margin-bottom: 10px;
+    }
+    .subject {
+      font-weight: bold;
+    }
+    .content {
+      text-align: justify;
+    }
+  </style>
+</head>
+<body>
+  <img src="{{ logo_path }}" alt="FlairMinds Logo" class="logo">
+
+  <div class="date">{{ todays_date }}</div>
+
+  <div class="subject">Subject: Relieving letter</div>
+
+  <p>
+    To,<br>
+    {{ employee_name }},<br>
+    Associate.<br>
+    Associate ID: {{ employee_id }}<br>
+    Pune.
+  </p>
+
+  <p>Dear {{ employee_name }},</p>
+
+  <div class="content">
+    <p>This is with reference to your resignation letter dated {{ resignation_date }} from the services of our Company.</p>
+    <p>Your resignation has been accepted by the management, and you are relieved from the services of the Company with effect from {{ relieving_date }}.</p>
+    <p>This is also to certify that Mr. {{ employee_name }} (Associate ID: {{ employee_id }}) was in the employment contract of our organization from {{ joining_date }} to {{ last_working_date }} with a designation of {{ designation }}, and his last drawn CTC was Rs. {{ ctc }} ({{ ctc_words }}) per year and including a yearly variable bonus of Rs. {{ bonus }}.</p>
+    <p>If you have any questions or queries, please send an email to the HR department at hr@flairminds.com.</p>
+    <p>We wish you all the best for your future endeavors.</p>
+  </div>
+
+  <div class="signature">
+    <p>Regards,</p>
+    <p><strong>Human Resource Management<br>
+    FlairMinds Software Pvt. Ltd.</strong></p>
+  </div>
+</body>
+</html>
