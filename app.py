@@ -43,7 +43,7 @@ from sqlalchemy import text
 
 
 TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com", "Parag.Khandekar@flairminds.com"]
-# TO_ADDRESSES="suraj.paikekar@flairminds.com"
+# TO_ADDRESSES="surajpaikekar@gmail.com"
 # @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 # @scheduler.task('cron',id='send_leave_email01', hour=5, minute=00)
 # @scheduler.task('cron', id='send_leave_email02', hour=7, minute=00)
@@ -1711,6 +1711,7 @@ def send_employees_in_office_email():
                             EmploymentStatus
                         FROM Employee
                         WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee', 'Intern', 'Active', 'Resigned')
+                        AND EmployeeId NOT IN ('EMP101', 'EMP54', 'EMP46', 'EMP47');
                     """)
                 ).fetchall()
 
@@ -1862,6 +1863,7 @@ def send_employees_in_office_email2():
                             EmploymentStatus
                         FROM Employee
                         WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee', 'Intern', 'Active', 'Resigned')
+                        AND EmployeeId NOT IN ('EMP101', 'EMP54', 'EMP46', 'EMP47');
                     """)
                 ).fetchall()
 
