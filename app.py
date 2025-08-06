@@ -2371,14 +2371,26 @@ def get_assigned_employees_skills():
 @app.route('/api/skill-statuses/<employeeId>', methods=['GET'])
 def get_skill_statuses(employeeId):
     try:
+        # result = db.session.execute(text("""
+        #     SELECT r.ReviewId, r.EmployeeId, r.SkillId, r.EvaluatorId,
+        #            r.EvaluatorScore, r.Comments, r.IsReady, r.Status, r.ReviewDate,
+        #            COALESCE(e.FirstName + ' ' + e.LastName, '') AS EvaluatorName,
+        #            s.SkillName, r.IsNew
+        #     FROM EmployeeSkillReview r
+        #     JOIN Skill s ON s.SkillId = r.SkillId
+        #     LEFT JOIN Employee e ON e.EmployeeId = r.EvaluatorId
+        #     WHERE r.EmployeeId = :employee_id
+        # """), {"employee_id": employeeId}).fetchall()
         result = db.session.execute(text("""
-            SELECT r.ReviewId, r.EmployeeId, r.SkillId, r.EvaluatorId,
-                   r.EvaluatorScore, r.Comments, r.IsReady, r.Status, r.ReviewDate,
-                   COALESCE(e.FirstName + ' ' + e.LastName, '') AS EvaluatorName,
-                   s.SkillName
+           SELECT r.ReviewId, r.EmployeeId, r.SkillId, r.EvaluatorId,
+                r.EvaluatorScore, r.Comments, r.IsReady, r.Status, r.ReviewDate,
+                COALESCE(e.FirstName + ' ' + e.LastName, '') AS EvaluatorName,
+                s.SkillName, r.IsNew,
+                es.SelfEvaluation, es.SkillLevel
             FROM EmployeeSkillReview r
             JOIN Skill s ON s.SkillId = r.SkillId
             LEFT JOIN Employee e ON e.EmployeeId = r.EvaluatorId
+            LEFT JOIN EmployeeSkill es ON es.EmployeeId = r.EmployeeId AND es.SkillId = r.SkillId
             WHERE r.EmployeeId = :employee_id
         """), {"employee_id": employeeId}).fetchall()
 
@@ -2394,7 +2406,10 @@ def get_skill_statuses(employeeId):
                 'Status': row.Status,
                 'ReviewDate': row.ReviewDate.isoformat() if row.ReviewDate else None,
                 'EvaluatorName': row.EvaluatorName,
-                'SkillName': row.SkillName
+                'SkillName': row.SkillName,
+                'IsNew': bool(row.IsNew),
+                'SelfEvaluation': float(row.SelfEvaluation) if row.SelfEvaluation else 0.0,
+                'SkillLevel': row.SkillLevel
             } for row in result
         ]
         return jsonify({'status': 'success', 'data': reviews}), 200
@@ -2437,6 +2452,42 @@ def save_review():
             FROM Employee WHERE EmployeeId = :evaluator_id
         """), {"evaluator_id": evaluator_id}).fetchone().EvaluatorName
 
+        # if existing_review:
+        #     db.session.execute(text("""
+        #         UPDATE EmployeeSkillReview
+        #         SET EvaluatorId = :evaluator_id,
+        #             EvaluatorScore = :evaluator_score,
+        #             Comments = :comments,
+        #             IsReady = :is_ready,
+        #             Status = 'Reviewed',
+        #             ReviewDate = GETDATE(),
+        #             IsNew = 0 
+        #         WHERE ReviewId = :review_id AND EmployeeId = :employee_id AND SkillId = :skill_id
+        #     """), {
+        #         "review_id": existing_review.ReviewId,
+        #         "employee_id": employee_id,
+        #         "skill_id": skill_id,
+        #         "evaluator_id": evaluator_id,
+        #         "evaluator_score": evaluator_score,
+        #         "comments": comments,
+        #         "is_ready": is_ready
+        #     })
+        #     review_id = existing_review.ReviewId
+        # else:
+        #     review_id = str(uuid.uuid4())
+        #     db.session.execute(text("""
+        #         INSERT INTO EmployeeSkillReview (ReviewId, EmployeeId, SkillId, EvaluatorId, EvaluatorScore, Comments, IsReady, Status, ReviewDate, IsNew)
+        #         VALUES (:review_id, :employee_id, :skill_id, :evaluator_id, :evaluator_score, :comments, :is_ready, 'Reviewed', GETDATE(), 1)
+        #     """), {
+        #         "review_id": review_id,
+        #         "employee_id": employee_id,
+        #         "skill_id": skill_id,
+        #         "evaluator_id": evaluator_id,
+        #         "evaluator_score": evaluator_score,
+        #         "comments": comments,
+        #         "is_ready": is_ready
+        #     })
+
         if existing_review:
             db.session.execute(text("""
                 UPDATE EmployeeSkillReview
@@ -2460,8 +2511,8 @@ def save_review():
         else:
             review_id = str(uuid.uuid4())
             db.session.execute(text("""
-                INSERT INTO EmployeeSkillReview (ReviewId, EmployeeId, SkillId, EvaluatorId, EvaluatorScore, Comments, IsReady, Status, ReviewDate)
-                VALUES (:review_id, :employee_id, :skill_id, :evaluator_id, :evaluator_score, :comments, :is_ready, 'Reviewed', GETDATE())
+                INSERT INTO EmployeeSkillReview (ReviewId, EmployeeId, SkillId, EvaluatorId, EvaluatorScore, Comments, IsReady, Status, ReviewDate, IsNew)
+                VALUES (:review_id, :employee_id, :skill_id, :evaluator_id, :evaluator_score, :comments, :is_ready, 'Reviewed', GETDATE(), 0)
             """), {
                 "review_id": review_id,
                 "employee_id": employee_id,
@@ -2537,6 +2588,25 @@ def add_employee_skill():
             "is_ready": is_ready
         })
 
+        # Add initial review with IsNew = true
+        review_id = str(uuid.uuid4())
+        evaluator_name = db.session.execute(text("""
+            SELECT FirstName + ' ' + LastName AS EvaluatorName
+            FROM Employee WHERE EmployeeId = :evaluator_id
+        """), {"evaluator_id": evaluator_id}).fetchone().EvaluatorName
+        db.session.execute(text("""
+            INSERT INTO EmployeeSkillReview (ReviewId, EmployeeId, SkillId, EvaluatorId, EvaluatorScore, Comments, IsReady, Status, ReviewDate, IsNew)
+            VALUES (:review_id, :employee_id, :skill_id, :evaluator_id, :self_score, '', :is_ready, 'Reviewed', GETDATE(), 1)
+        """), {
+            "review_id": review_id,
+            "employee_id": employee_id,
+            "skill_id": skill_id,
+            "evaluator_id": evaluator_id,
+            "self_score": self_score,
+            "comments": "",
+            "is_ready": is_ready
+        })
+
         db.session.commit()
         return jsonify({'status': 'success', 'message': 'Skill added successfully', 'data': {'skillId': skill_id}}), 200
     except Exception as e:
@@ -2595,7 +2665,7 @@ def get_skills():
     try:
         result = db.session.execute(text("""
             SELECT SkillId, SkillName
-            FROM Skill
+            FROM Skill where is_master_skill = 1
         """)).fetchall()
         skills = [{'SkillId': row.SkillId, 'SkillName': row.SkillName} for row in result]
         return jsonify({'status': 'success', 'data': skills}), 200
