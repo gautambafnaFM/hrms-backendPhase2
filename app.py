@@ -1711,7 +1711,7 @@ def send_employees_in_office_email():
                             EmploymentStatus
                         FROM Employee
                         WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee', 'Intern', 'Active', 'Resigned')
-                        AND EmployeeId NOT IN ('EMP101', 'EMP54', 'EMP46', 'EMP47');
+                        AND EmployeeId NOT IN ('EMP101', 'EMP54', 'EMP46', 'EMP47','EMP330');
                     """)
                 ).fetchall()
 
@@ -1863,7 +1863,7 @@ def send_employees_in_office_email2():
                             EmploymentStatus
                         FROM Employee
                         WHERE EmploymentStatus IN ('Confirmed', 'Probation', 'Trainee', 'Intern', 'Active', 'Resigned')
-                        AND EmployeeId NOT IN ('EMP101', 'EMP54', 'EMP46', 'EMP47');
+                        AND EmployeeId NOT IN ('EMP101', 'EMP54', 'EMP46', 'EMP47','EMP330');
                     """)
                 ).fetchall()
 
