@@ -24,7 +24,9 @@ USERNAME = os.getenv('USER_NAME')
 # Email configuration
 FROM_ADDRESS = os.getenv('EMAIL_FROM_ADDRESS')
 FROM_PASSWORD = os.getenv('EMAIL_FROM_PASSWORD')  # Make sure to store your app password here securely
-TO_ADDRESSES =[ "hr@flairminds.com","hasmukh@flairminds.com", "shishir.nigam@flairminds.com"]
+
+TO_ADDRESSES = os.getenv("TO_ADDRESSES", "").split(",")
+TO_ADDRESSES = [email.strip() for email in TO_ADDRESSES if email.strip()]  # clean emails
 
 # SQL Server Configuration
 # app.config['SQLALCHEMY_DATABASE_URI'] = (

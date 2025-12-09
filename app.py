@@ -42,7 +42,7 @@ from scheduler_job import register_jobs
 # from reportlab.lib.pagesizes import letter
 
 
-@scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
+# @scheduler.task('cron', id='send_leave_email01', hour=12, minute=12)
 @scheduler.task('cron', id='send_employees_in_office_email', hour=5, minute=00)
 
 @app.route('/api/leave-records-mail', methods=['GET'])
