@@ -7,8 +7,8 @@ def register_jobs():  # 24 hour clock
     @scheduler.task(
         'cron',
         id='leave_email_daily',
-        hour=16,
-        minute=2
+        hour=9,
+        minute=00
     )
     def scheduled_leave_mail():
         print("Running scheduled leave email job at 9:00 AM")

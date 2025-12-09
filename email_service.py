@@ -67,7 +67,7 @@ def process_leave_email():
     # Email setup
     msg = MIMEMultipart()
     msg['From'] = FROM_ADDRESS
-    msg['To'] = TO_ADDRESSES
+    msg['To'] = ", ".join(TO_ADDRESSES)   # Convert list to string
     msg['Subject'] = f"Leave Report - {current_date_str}"
     msg.attach(MIMEText(f"<html><body>{leave_table}</body></html>", 'html'))
 
