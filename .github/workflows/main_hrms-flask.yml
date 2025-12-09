@@ -24,6 +24,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install system packages (if needed)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev
+        
       - name: Create and start virtual environment
         run: |
           python -m venv venv
@@ -68,4 +73,5 @@ jobs:
         with:
           app-name: 'hrms-flask'
           slot-name: 'Production'
+
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_F8A3A20462844F209D396698B25D2BA4 }}
